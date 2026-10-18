@@ -1,3 +1,4 @@
+import type { MetricDefinition } from '../domain/board.js';
 import type { ResourceSeed } from '../domain/schemas.js';
 import type { TemplateId, WorkspaceSettings } from '../domain/types.js';
 
@@ -6,8 +7,8 @@ export interface Template {
   readonly id: TemplateId;
   readonly label: string;
   readonly settings: WorkspaceSettings;
-  /** Statuses a piece of equipment may be in (used from M2 by set-status). */
-  readonly equipmentStatuses: readonly string[];
   readonly workspace: { readonly id: string; readonly name: string; readonly timezone: string };
+  /** What the live board for this workspace shows. */
+  readonly board: { readonly title: string; readonly metrics: readonly MetricDefinition[] };
   readonly resources: readonly ResourceSeed[];
 }

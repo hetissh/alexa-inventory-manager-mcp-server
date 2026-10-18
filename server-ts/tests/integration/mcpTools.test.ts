@@ -10,7 +10,7 @@ import {
   TEST_ACTOR,
   TEST_CLIENT_INFO,
 } from '../helpers/connect.js';
-import { WORKSPACE_ID } from '../helpers/db.js';
+import { ALL_WORKSPACE_IDS, CAFE_ID, REPAIR_ID, WORKSPACE_ID } from '../helpers/db.js';
 
 let pair: ConnectedPair | undefined;
 
@@ -57,10 +57,18 @@ describe('tool catalogue conventions (AGENTS.md)', () => {
 
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       'adjust-quantity',
+      'assign-job',
+      'cancel-command',
       'check-health',
+      'confirm-command',
       'find-resources',
+      'get-board',
       'get-resource',
+      'get-workspace',
+      'list-alerts',
       'list-events',
+      'set-status',
+      'undo-last-change',
     ]);
     for (const tool of tools) {
       expect(tool.name).toMatch(/^[a-z]+(-[a-z0-9]+)+$/);
@@ -76,11 +84,35 @@ describe('tool catalogue conventions (AGENTS.md)', () => {
     }
   });
 
-  it('marks only adjust-quantity as a change', async () => {
+  it('marks exactly the tools that can change something as not read-only', async () => {
     const { client } = await connect();
     const { tools } = await client.listTools();
     const changing = tools.filter((tool) => tool.annotations?.readOnlyHint === false).map((tool) => tool.name);
-    expect(changing).toEqual(['adjust-quantity']);
+    expect(changing.sort()).toEqual([
+      'adjust-quantity',
+      'assign-job',
+      'cancel-command',
+      'confirm-command',
+      'set-status',
+      'undo-last-change',
+    ]);
+  });
+
+  it('flags only confirm-command as destructive, so the client\'s own prompt is a second gate', async () => {
+    const { client } = await connect();
+    const { tools } = await client.listTools();
+    const destructive = tools.filter((tool) => tool.annotations?.destructiveHint === true).map((tool) => tool.name);
+    expect(destructive).toEqual(['confirm-command']);
+  });
+
+  it('tells the model never to confirm without the user\'s yes', async () => {
+    const { client } = await connect();
+    const { tools } = await client.listTools();
+    for (const name of ['adjust-quantity', 'set-status', 'assign-job', 'undo-last-change']) {
+      const tool = tools.find((candidate) => candidate.name === name);
+      expect(tool?.description).toMatch(/Never confirm on your own/);
+    }
+    expect(tools.find((tool) => tool.name === 'confirm-command')?.description).toMatch(/ONLY after the user has clearly said yes/);
   });
 });
 
@@ -95,6 +127,7 @@ describe('check-health', () => {
       nodeVersion: 'v24.0.0-test',
       uptimeSeconds: 42,
       workspace: WORKSPACE_ID,
+      workspaces: ALL_WORKSPACE_IDS,
       database: 'ok',
       client: TEST_CLIENT_INFO,
     });
@@ -254,7 +287,6 @@ describe('adjust-quantity', () => {
 
   it.each([
     ['more than is in stock', { resource: 'brake pads', delta: -20 }, 'INSUFFICIENT_STOCK'],
-    ['a large change that needs confirmation', { resource: 'air filters', delta: 100 }, 'CONFIRMATION_UNSUPPORTED'],
     ['zero', { resource: 'air filters', delta: 0 }, 'INVALID_ARGUMENT'],
     ['an implausible amount', { resource: 'air filters', delta: 10_001 }, 'LIMIT_EXCEEDED'],
   ])('refuses %s with an error result and a reason code', async (_label, args, code) => {
@@ -319,5 +351,258 @@ describe('list-events', () => {
       status: 'ambiguous',
       candidates: [{ id: 'item_air_filter' }, { id: 'item_oil_filter' }],
     });
+  });
+});
+
+function tokenFrom(data: Record<string, unknown>): string {
+  const confirmation = data['confirmation'];
+  if (typeof confirmation === 'object' && confirmation !== null && 'token' in confirmation && typeof confirmation.token === 'string') {
+    return confirmation.token;
+  }
+  throw new Error('no confirmation token in the result');
+}
+
+describe('the approval flow, through MCP', () => {
+  it('set-status asks first; nothing changes until confirm-command', async () => {
+    const connected = await connect();
+
+    const asked = await call(connected, 'set-status', { resource: 'compressor two', status: 'under maintenance' });
+
+    expect(asked.isError).toBe(false);
+    expect(asked.data).toMatchObject({
+      status: 'confirmation_required',
+      workspaceId: WORKSPACE_ID,
+      spoken: 'Mark Compressor 2 as under maintenance (currently available)?',
+      confirmation: { reason: 'status_change', readback: 'Mark Compressor 2 as under maintenance (currently available)?' },
+    });
+    expect(tokenFrom(asked.data)).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    expect((await call(connected, 'get-resource', { resource: 'compressor two' })).data).toMatchObject({
+      resource: { attributes: { status: 'available' } },
+    });
+    expect((await call(connected, 'list-events')).data['events']).toEqual([]);
+
+    const done = await call(connected, 'confirm-command', { token: tokenFrom(asked.data) });
+
+    expect(done.isError).toBe(false);
+    expect(done.data).toMatchObject({
+      status: 'committed',
+      replayed: false,
+      spoken: 'Compressor 2 is now under maintenance.',
+      resource: { attributes: { status: 'maintenance' } },
+      event: { operation: 'SET_STATUS', before: { status: 'available' }, after: { status: 'maintenance' }, actor: TEST_ACTOR },
+      alerts: { opened: [], resolved: [] },
+    });
+  });
+
+  it('cancel-command discards the waiting change', async () => {
+    const connected = await connect();
+    const asked = await call(connected, 'set-status', { resource: 'compressor two', status: 'maintenance' });
+
+    const cancelled = await call(connected, 'cancel-command', { token: tokenFrom(asked.data) });
+
+    expect(cancelled).toMatchObject({ isError: false, data: { status: 'cancelled', workspaceId: WORKSPACE_ID } });
+    const late = await call(connected, 'confirm-command', { token: tokenFrom(asked.data) });
+    expect(late.isError).toBe(true);
+    expect(late.data).toMatchObject({ status: 'rejected', code: 'CONFIRMATION_CANCELLED' });
+  });
+
+  it('a large stock change waits for approval too', async () => {
+    const connected = await connect();
+    const asked = await call(connected, 'adjust-quantity', { resource: 'air filters', delta: 100 });
+    expect(asked.data).toMatchObject({ status: 'confirmation_required', confirmation: { reason: 'large_adjustment' } });
+
+    const done = await call(connected, 'confirm-command', { token: tokenFrom(asked.data) });
+    expect(done.data).toMatchObject({ status: 'committed', resource: { attributes: { quantity: 135 } } });
+  });
+
+  it('refuses an unknown token with an error result, and a malformed token at the boundary', async () => {
+    const connected = await connect();
+
+    const unknown = await call(connected, 'confirm-command', { token: 'z'.repeat(22) });
+    expect(unknown.isError).toBe(true);
+    expect(unknown.data).toMatchObject({ status: 'rejected', code: 'UNKNOWN_CONFIRMATION' });
+
+    const malformed = await connected.client
+      .callTool({ name: 'confirm-command', arguments: { token: 'not-a-token' } })
+      .then((result) => result.isError === true)
+      .catch(() => true);
+    expect(malformed).toBe(true);
+  });
+
+  it('undo-last-change asks first, then restores the earlier value', async () => {
+    const connected = await connect();
+    await call(connected, 'adjust-quantity', { resource: 'air filters', delta: 20 });
+
+    const asked = await call(connected, 'undo-last-change');
+    expect(asked.data).toMatchObject({
+      status: 'confirmation_required',
+      confirmation: { reason: 'undo', readback: 'Undo "Added 20 pieces to Air Filter (35 to 55)"?' },
+    });
+    const done = await call(connected, 'confirm-command', { token: tokenFrom(asked.data) });
+
+    expect(done.data).toMatchObject({
+      status: 'committed',
+      resource: { attributes: { quantity: 35 } },
+      event: { operation: 'REVERSE_EVENT', reversalOf: expect.any(String) as string },
+    });
+  });
+
+  it('undo-last-change has nothing to undo at first', async () => {
+    const result = await call(await connect(), 'undo-last-change');
+    expect(result).toMatchObject({ isError: true, data: { status: 'rejected', code: 'NOTHING_TO_UNDO' } });
+  });
+
+  it('assign-job works in the repair workspace, and says which name it could not find', async () => {
+    const connected = await connect();
+    const asked = await call(connected, 'assign-job', { job: 'job one oh eight', assignee: 'Rahul', workspaceId: REPAIR_ID });
+    expect(asked.data).toMatchObject({
+      status: 'confirmation_required',
+      workspaceId: REPAIR_ID,
+      spoken: 'Assign Job 108 to Rahul?',
+    });
+    const done = await call(connected, 'confirm-command', { token: tokenFrom(asked.data), workspaceId: REPAIR_ID });
+    expect(done.data).toMatchObject({ status: 'committed', resource: { attributes: { status: 'assigned', assigneeId: 'tech_rahul' } } });
+
+    const missing = await call(connected, 'assign-job', { job: 'job 110', assignee: 'Zed', workspaceId: REPAIR_ID });
+    expect(missing.data).toMatchObject({ status: 'not_found', query: 'Zed', role: 'assignee' });
+    const unclear = await call(connected, 'assign-job', { job: 'job 110', assignee: 'rahulx', workspaceId: REPAIR_ID });
+    expect(unclear.data).toMatchObject({ status: 'ambiguous', role: 'assignee', candidates: [{ name: 'Rahul' }] });
+  });
+});
+
+describe('alerts, through MCP', () => {
+  it('a drop below the reorder level shows up in the result, list-alerts and get-board, and clears on restock', async () => {
+    const connected = await connect();
+
+    const removed = await call(connected, 'adjust-quantity', { resource: 'brake pads', delta: -10 });
+    expect(removed.data).toMatchObject({
+      status: 'committed',
+      alerts: { opened: [{ resourceId: 'item_brake_pads', rule: 'low_stock', status: 'open' }], resolved: [] },
+    });
+    expect(removed.data['spoken']).toContain('Alert: Brake Pads is low on stock');
+
+    const alerts = await call(connected, 'list-alerts');
+    expect(alerts.data).toMatchObject({ spoken: 'There is 1 open alert.', alerts: [{ resourceName: 'Brake Pads' }] });
+
+    const board = await call(connected, 'get-board');
+    expect(board.data).toMatchObject({
+      metrics: [{ label: 'Low stock', value: 1 }, { label: 'Equipment down', value: 0 }],
+      resources: expect.arrayContaining([expect.objectContaining({ id: 'item_brake_pads', hasAlert: true })]) as unknown[],
+    });
+
+    const restocked = await call(connected, 'adjust-quantity', { resource: 'brake pads', delta: 10 });
+    expect(restocked.data).toMatchObject({ alerts: { opened: [], resolved: [{ resourceId: 'item_brake_pads', status: 'resolved' }] } });
+    expect((await call(connected, 'list-alerts')).data['alerts']).toEqual([]);
+    expect((await call(connected, 'list-alerts', { status: 'all' })).data['alerts']).toHaveLength(1);
+  });
+});
+
+describe('get-board', () => {
+  it('returns headline numbers, every resource and the latest changes in one versioned snapshot', async () => {
+    const connected = await connect();
+    const before = await call(connected, 'get-board');
+    expect(before.data).toMatchObject({
+      workspaceId: WORKSPACE_ID,
+      title: 'Northside Operations',
+      version: 0,
+      spoken: 'Northside Operations: Low stock 0, Equipment down 0.',
+      recentActivity: [],
+    });
+    expect(before.data['resources']).toHaveLength(4);
+    expect(new Date(String(before.data['generatedAt'])).getTime()).not.toBeNaN();
+
+    await call(connected, 'adjust-quantity', { resource: 'air filters', delta: 1 });
+    const after = await call(connected, 'get-board');
+
+    expect(after.data['version']).toBe(1);
+    expect(after.data['recentActivity']).toHaveLength(1);
+  });
+
+  it('shows the cafe menu and the repair board for their workspaces', async () => {
+    const connected = await connect();
+    expect((await call(connected, 'get-board', { workspaceId: CAFE_ID })).data).toMatchObject({
+      title: 'Harbor Cafe Menu',
+      metrics: [{ label: 'Available', value: 5 }, { label: 'Sold out', value: 0 }],
+    });
+    expect((await call(connected, 'get-board', { workspaceId: REPAIR_ID })).data).toMatchObject({
+      title: 'Eastside Repair Board',
+      metrics: [
+        { label: 'Open jobs', value: 3 },
+        { label: 'Unassigned', value: 2 },
+        { label: 'Technicians on duty', value: 3 },
+      ],
+    });
+  });
+});
+
+describe('workspaces', () => {
+  it('get-workspace describes what the workspace contains and which statuses are allowed', async () => {
+    const connected = await connect();
+
+    const warehouse = await call(connected, 'get-workspace');
+    expect(warehouse.data).toMatchObject({
+      workspaceId: WORKSPACE_ID,
+      name: 'Northside Operations',
+      template: 'warehouse',
+      workspaces: ALL_WORKSPACE_IDS,
+      counts: { inventory_item: 3, equipment: 1 },
+      settings: { largeAdjustThreshold: 100, maxAdjustment: 10_000, equipmentStatuses: ['available', 'maintenance', 'out_of_service'] },
+      spreadsheet: 'not_configured',
+    });
+    expect(warehouse.data['settings']).not.toHaveProperty('menuItemStatuses');
+
+    const cafe = await call(connected, 'get-workspace', { workspaceId: CAFE_ID });
+    expect(cafe.data).toMatchObject({ counts: { menu_item: 5 }, settings: { menuItemStatuses: ['available', 'sold_out'] } });
+    expect(cafe.data['settings']).not.toHaveProperty('equipmentStatuses');
+  });
+
+  it('get-workspace says when a spreadsheet is configured', async () => {
+    const connected = await connect();
+    await connected.services.pool.query(`UPDATE workspaces SET integrations = '{"sheets":{"spreadsheetId":"abc"}}' WHERE id = $1`, [WORKSPACE_ID]);
+
+    expect((await call(connected, 'get-workspace')).data).toMatchObject({ spreadsheet: 'configured' });
+    const added = await call(connected, 'adjust-quantity', { resource: 'air filters', delta: 1 });
+    expect(added.data).toMatchObject({ sync: { sheets: 'pending' } });
+  });
+
+  it('the same tools work in every workspace: reads and changes follow workspaceId', async () => {
+    const connected = await connect();
+
+    const menu = await call(connected, 'find-resources', { workspaceId: CAFE_ID });
+    expect(menu.data).toMatchObject({ workspaceId: CAFE_ID, total: 5 });
+    const jobs = await call(connected, 'find-resources', { workspaceId: REPAIR_ID, type: 'job' });
+    expect(jobs.data['total']).toBe(4);
+    expect((await call(connected, 'get-resource', { resource: 'job one oh eight', workspaceId: REPAIR_ID })).data).toMatchObject({
+      spoken: 'Job 108 (Brake overhaul) is waiting.',
+    });
+    expect((await call(connected, 'list-events', { workspaceId: CAFE_ID })).data).toMatchObject({ workspaceId: CAFE_ID, events: [] });
+  });
+
+  it('a name from another workspace is not found here', async () => {
+    const result = await call(await connect(), 'get-resource', { resource: 'chicken biryani' });
+    expect(result.data).toMatchObject({ status: 'not_found' });
+  });
+
+  it('refuses a workspace that is not on the allow-list, for reads and changes alike', async () => {
+    pair = await connectWithContext({ workspaceIds: [WORKSPACE_ID] });
+    for (const [name, args] of [
+      ['find-resources', {}],
+      ['get-board', {}],
+      ['adjust-quantity', { resource: 'chicken biryani', delta: 1 }],
+      ['confirm-command', { token: 'z'.repeat(22) }],
+    ] as const) {
+      const result = await call(pair, name, { ...args, workspaceId: CAFE_ID });
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain('is not available to this server');
+    }
+  });
+
+  it('refuses a malformed workspace id at the boundary', async () => {
+    const connected = await connect();
+    const refused = await connected.client
+      .callTool({ name: 'find-resources', arguments: { workspaceId: '../../etc' } })
+      .then((result) => result.isError === true)
+      .catch(() => true);
+    expect(refused).toBe(true);
   });
 });

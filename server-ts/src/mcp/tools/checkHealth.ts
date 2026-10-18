@@ -11,7 +11,8 @@ const outputSchema = {
   version: z.string().describe('Server version.'),
   nodeVersion: z.string().describe('Node.js runtime version.'),
   uptimeSeconds: z.number().nonnegative().describe('Seconds since the server process started.'),
-  workspace: z.string().describe('The workspace this server reads and writes.'),
+  workspace: z.string().describe('The default workspace, used when a tool call does not name one.'),
+  workspaces: z.array(z.string()).describe('Every workspace tools may address.'),
   database: z.enum(['ok', 'unavailable']),
   client: z
     .object({ name: z.string(), version: z.string() })
@@ -25,7 +26,7 @@ export function registerCheckHealth(server: McpServer, context: ToolContext): vo
     {
       title: 'Check server health',
       description:
-        'Confirms the VoiceOps server is reachable and its database is connected. Reports the server version, uptime, the workspace it serves and the connected MCP client. Changes nothing.',
+        'Confirms the VoiceOps server is reachable and its database is connected. Reports the server version, uptime, the default workspace, every workspace you may use and the connected MCP client. Changes nothing.',
       outputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
     },
@@ -38,7 +39,8 @@ export function registerCheckHealth(server: McpServer, context: ToolContext): vo
         version: SERVER_VERSION,
         nodeVersion: context.nodeVersion,
         uptimeSeconds: Math.floor(context.uptimeSeconds()),
-        workspace: context.workspaceId,
+        workspace: context.defaultWorkspaceId,
+        workspaces: context.workspaceIds,
         database,
         client: info ? { name: info.name, version: info.version } : null,
       });

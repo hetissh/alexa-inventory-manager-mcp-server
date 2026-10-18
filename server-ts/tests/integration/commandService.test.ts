@@ -10,7 +10,7 @@ import {
 import { WorkspaceNotFoundError } from '../../src/app/errors.js';
 import type { AppLogger, Store } from '../../src/app/ports.js';
 import { createPgStore } from '../../src/infra/db/pgStore.js';
-import { createTestPool, resetWarehouse, WORKSPACE_ID } from '../helpers/db.js';
+import { createTestPool, resetAll, WORKSPACE_ID } from '../helpers/db.js';
 import { inventoryItem } from '../helpers/resources.js';
 
 let pool: Pool;
@@ -29,7 +29,7 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   vi.clearAllMocks();
-  await resetWarehouse(pool);
+  await resetAll(pool);
 });
 
 const request = (overrides: Partial<CommandRequest> = {}): CommandRequest => ({
@@ -286,15 +286,11 @@ describe('refusals change nothing', () => {
   });
 
   it.each([
-    ['a large addition', 'air filters', 100],
-    ['removing everything', 'brake pads', -12],
-  ])('refuses %s because confirmation is not available yet', async (_label, target, delta) => {
+    ['a large addition', 'air filters', 100, 'large_adjustment'],
+    ['removing everything', 'brake pads', -12, 'reaches_zero'],
+  ])('holds %s for confirmation and changes nothing yet', async (_label, target, delta, reason) => {
     const outcome = await service.execute(request({ target, arguments: { delta } }));
-    expect(outcome).toMatchObject({
-      status: 'rejected',
-      code: 'CONFIRMATION_UNSUPPORTED',
-      message: expect.stringContaining('nothing was changed') as string,
-    });
+    expect(outcome).toMatchObject({ status: 'confirmation_required', confirmation: { reason } });
     await expectUntouched();
   });
 

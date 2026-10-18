@@ -2,10 +2,11 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCommandService } from '../../src/app/commandService.js';
+import { WorkspaceNotFoundError } from '../../src/app/errors.js';
 import type { AppLogger, Store } from '../../src/app/ports.js';
 import { createReadService, type ReadService } from '../../src/app/readService.js';
 import { createPgStore } from '../../src/infra/db/pgStore.js';
-import { createTestPool, resetWarehouse, WORKSPACE_ID } from '../helpers/db.js';
+import { createTestPool, resetAll, WORKSPACE_ID } from '../helpers/db.js';
 
 let pool: Pool;
 let store: Store;
@@ -23,7 +24,7 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   vi.clearAllMocks();
-  await resetWarehouse(pool);
+  await resetAll(pool);
 });
 
 async function addStock(commandId: string, target: string, delta: number): Promise<void> {
@@ -167,5 +168,88 @@ describe('listEvents', () => {
       status: 'ambiguous',
       candidates: [{ id: 'item_air_filter' }, { id: 'item_oil_filter' }],
     });
+  });
+});
+
+describe('listAlerts', () => {
+  it('lists open alerts by default, with a sentence', async () => {
+    expect(await reads.listAlerts(WORKSPACE_ID, { status: 'open', limit: 10 })).toEqual({
+      alerts: [],
+      spoken: 'There are no open alerts.',
+    });
+
+    await addStock('drop', 'brake pads', -10);
+
+    const open = await reads.listAlerts(WORKSPACE_ID, { status: 'open', limit: 10 });
+    expect(open.alerts.map((alert) => alert.resourceName)).toEqual(['Brake Pads']);
+    expect(open.spoken).toBe('There is 1 open alert.');
+    await addStock('restock', 'brake pads', 10);
+    expect((await reads.listAlerts(WORKSPACE_ID, { status: 'open', limit: 10 })).alerts).toEqual([]);
+    expect((await reads.listAlerts(WORKSPACE_ID, { status: 'all', limit: 10 })).spoken).toBe('There is 1 alert.');
+  });
+});
+
+describe('getBoard', () => {
+  const fixedNow = new Date('2026-10-19T09:30:00.000Z');
+
+  it('returns the versioned board: title, headline numbers, resources, alerts and recent activity', async () => {
+    const board = createReadService(store, logger, () => fixedNow);
+    await addStock('drop', 'brake pads', -10);
+
+    const result = await board.getBoard(WORKSPACE_ID);
+
+    expect(result).toMatchObject({
+      workspaceId: WORKSPACE_ID,
+      title: 'Northside Operations',
+      version: 1,
+      generatedAt: fixedNow,
+      spoken: 'Northside Operations: Low stock 1, Equipment down 0.',
+      metrics: [
+        { label: 'Low stock', value: 1 },
+        { label: 'Equipment down', value: 0 },
+      ],
+    });
+    expect(result.resources.map((entry) => [entry.resource.id, entry.hasAlert])).toEqual([
+      ['equipment_compressor_2', false],
+      ['item_air_filter', false],
+      ['item_brake_pads', true],
+      ['item_oil_filter', false],
+    ]);
+    expect(result.alerts).toHaveLength(1);
+    expect(result.recentActivity.map((event) => event.summary)).toEqual([
+      'Removed 10 pieces from Brake Pads (12 to 2)',
+    ]);
+  });
+
+  it('uses the real clock by default, and refuses an unknown workspace', async () => {
+    const before = Date.now();
+    const result = await reads.getBoard(WORKSPACE_ID);
+    expect(result.generatedAt.getTime()).toBeGreaterThanOrEqual(before);
+    await expect(reads.getBoard('no-such-workspace')).rejects.toBeInstanceOf(WorkspaceNotFoundError);
+  });
+
+  it('keeps only the latest ten changes on the board', async () => {
+    for (let index = 0; index < 12; index += 1) {
+      await addStock(`bulk-${String(index)}`, 'air filters', 1);
+    }
+    expect((await reads.getBoard(WORKSPACE_ID)).recentActivity).toHaveLength(10);
+  });
+});
+
+describe('getWorkspaceInfo', () => {
+  it('describes what a workspace contains and the rules that apply', async () => {
+    const info = await reads.getWorkspaceInfo(WORKSPACE_ID);
+    expect(info).toMatchObject({
+      workspace: { id: WORKSPACE_ID, name: 'Northside Operations', template: 'warehouse' },
+      templateLabel: 'Warehouse',
+      counts: { inventory_item: 3, equipment: 1 },
+      spoken: 'Northside Operations is a warehouse workspace with 4 resources.',
+    });
+    expect(info.settings.largeAdjustThreshold).toBe(100);
+    expect((await reads.getWorkspaceInfo('eastside-repairs')).counts).toEqual({ job: 4, technician: 4 });
+  });
+
+  it('refuses an unknown workspace', async () => {
+    await expect(reads.getWorkspaceInfo('no-such-workspace')).rejects.toBeInstanceOf(WorkspaceNotFoundError);
   });
 });

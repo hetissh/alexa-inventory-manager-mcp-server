@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import { type Candidate, MATCH_KINDS } from '../domain/matcher.js';
 import { type Resource, RESOURCE_TYPES } from '../domain/schemas.js';
-import { type EventRecord, SYNC_STATUSES } from '../domain/types.js';
+import { ALERT_RULES, ALERT_STATUSES, type AlertRecord, type EventRecord, SYNC_STATUSES } from '../domain/types.js';
 
 // JSON-friendly shapes (ISO dates, no internal fields) shared by the tools' output schemas.
 
@@ -41,11 +41,24 @@ export const eventViewSchema = z.object({
   source: z.string(),
   clientName: z.string().nullable(),
   createdAt: z.string().describe('ISO 8601 timestamp.'),
+  reversalOf: z.string().nullable().describe('The event this one undid, if it was an undo.'),
   sync: syncStateSchema.describe('Spreadsheet sync state for this event ("not_configured" if no spreadsheet is set up).'),
+});
+
+export const alertViewSchema = z.object({
+  id: z.string(),
+  resourceId: z.string(),
+  resourceName: z.string(),
+  rule: z.enum(ALERT_RULES),
+  status: z.enum(ALERT_STATUSES),
+  message: z.string(),
+  createdAt: z.string().describe('ISO 8601 timestamp.'),
+  resolvedAt: z.string().nullable(),
 });
 
 export type ResourceView = z.infer<typeof resourceViewSchema>;
 export type EventView = z.infer<typeof eventViewSchema>;
+export type AlertView = z.infer<typeof alertViewSchema>;
 export type SyncState = z.infer<typeof syncStateSchema>;
 
 export function toResourceView(resource: Resource): ResourceView {
@@ -79,7 +92,21 @@ export function toEventView(event: EventRecord, sync: SyncState): EventView {
     source: event.source,
     clientName: event.clientName,
     createdAt: event.createdAt.toISOString(),
+    reversalOf: event.reversalOf,
     sync,
+  };
+}
+
+export function toAlertView(alert: AlertRecord): AlertView {
+  return {
+    id: alert.alertId,
+    resourceId: alert.resourceId,
+    resourceName: alert.resourceName,
+    rule: alert.rule,
+    status: alert.status,
+    message: alert.message,
+    createdAt: alert.createdAt.toISOString(),
+    resolvedAt: alert.resolvedAt?.toISOString() ?? null,
   };
 }
 

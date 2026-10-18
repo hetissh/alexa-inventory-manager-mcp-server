@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { seedWorkspace } from '../../src/infra/db/seed.js';
 import type { Template } from '../../src/templates/types.js';
 import { warehouseTemplate } from '../../src/templates/warehouse.js';
-import { createTestPool, resetWarehouse, WORKSPACE_ID } from '../helpers/db.js';
+import { createTestPool, resetAll, WORKSPACE_ID } from '../helpers/db.js';
 
 let pool: Pool;
 
@@ -15,7 +15,7 @@ afterAll(async () => {
   await pool.end();
 });
 beforeEach(async () => {
-  await resetWarehouse(pool);
+  await resetAll(pool);
 });
 
 async function quantity(resourceId: string): Promise<number> {

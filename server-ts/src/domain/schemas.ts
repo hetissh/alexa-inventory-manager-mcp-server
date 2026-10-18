@@ -1,7 +1,11 @@
 import { z } from 'zod';
 
 import {
+  ALERT_RULES,
+  ALERT_STATUSES,
   COMMAND_SOURCES,
+  COMMAND_STATUSES,
+  JOB_STATUSES,
   type JsonValue,
   OPERATION_NAMES,
   TEMPLATE_IDS,
@@ -31,9 +35,11 @@ export const resourceIdSchema = z.string().regex(/^[a-z][a-z0-9_]{2,63}$/, 'must
 export const resourceNameSchema = safeText(80);
 export const aliasesSchema = z.array(resourceNameSchema).max(10);
 
-export const RESOURCE_TYPES = ['inventory_item', 'equipment'] as const;
+export const RESOURCE_TYPES = ['inventory_item', 'equipment', 'menu_item', 'job', 'technician'] as const;
 export const resourceTypeSchema = z.enum(RESOURCE_TYPES);
 export type ResourceType = z.infer<typeof resourceTypeSchema>;
+
+const statusSchema = z.string().regex(/^[a-z][a-z_]{0,39}$/, 'must be a lowercase snake_case status');
 
 export const inventoryAttributesSchema = z.object({
   quantity: z.number().int().nonnegative(),
@@ -41,9 +47,21 @@ export const inventoryAttributesSchema = z.object({
   reorderLevel: z.number().int().nonnegative(),
 });
 
-export const equipmentAttributesSchema = z.object({
-  status: z.string().regex(/^[a-z][a-z_]{0,39}$/, 'must be a lowercase snake_case status'),
+export const equipmentAttributesSchema = z.object({ status: statusSchema });
+
+export const menuItemAttributesSchema = z.object({
+  price: z.number().nonnegative(),
+  currency: z.string().regex(/^[A-Z]{3}$/, 'must be a 3-letter currency code'),
+  status: statusSchema,
 });
+
+export const jobAttributesSchema = z.object({
+  status: z.enum(JOB_STATUSES),
+  assigneeId: resourceIdSchema.nullable(),
+  description: safeText(80),
+});
+
+export const technicianAttributesSchema = z.object({ active: z.boolean() });
 
 const seedBase = { id: resourceIdSchema, name: resourceNameSchema, aliases: aliasesSchema };
 
@@ -51,6 +69,9 @@ const seedBase = { id: resourceIdSchema, name: resourceNameSchema, aliases: alia
 export const resourceSeedSchema = z.discriminatedUnion('type', [
   z.object({ ...seedBase, type: z.literal('inventory_item'), attributes: inventoryAttributesSchema }),
   z.object({ ...seedBase, type: z.literal('equipment'), attributes: equipmentAttributesSchema }),
+  z.object({ ...seedBase, type: z.literal('menu_item'), attributes: menuItemAttributesSchema }),
+  z.object({ ...seedBase, type: z.literal('job'), attributes: jobAttributesSchema }),
+  z.object({ ...seedBase, type: z.literal('technician'), attributes: technicianAttributesSchema }),
 ]);
 export type ResourceSeed = z.infer<typeof resourceSeedSchema>;
 
@@ -59,6 +80,9 @@ const persistedBase = { workspaceId: workspaceIdSchema, version: z.number().int(
 export const resourceSchema = z.discriminatedUnion('type', [
   z.object({ ...seedBase, ...persistedBase, type: z.literal('inventory_item'), attributes: inventoryAttributesSchema }),
   z.object({ ...seedBase, ...persistedBase, type: z.literal('equipment'), attributes: equipmentAttributesSchema }),
+  z.object({ ...seedBase, ...persistedBase, type: z.literal('menu_item'), attributes: menuItemAttributesSchema }),
+  z.object({ ...seedBase, ...persistedBase, type: z.literal('job'), attributes: jobAttributesSchema }),
+  z.object({ ...seedBase, ...persistedBase, type: z.literal('technician'), attributes: technicianAttributesSchema }),
 ]);
 export type Resource = z.infer<typeof resourceSchema>;
 export type InventoryItem = Extract<Resource, { type: 'inventory_item' }>;
@@ -89,4 +113,38 @@ export const eventRecordSchema = z.object({
   clientName: z.string().nullable(),
   createdAt: z.date(),
   reversalOf: z.uuid().nullable(),
+});
+
+export const alertRecordSchema = z.object({
+  alertId: z.uuid(),
+  workspaceId: workspaceIdSchema,
+  resourceId: resourceIdSchema,
+  resourceName: z.string().min(1),
+  rule: z.enum(ALERT_RULES),
+  status: z.enum(ALERT_STATUSES),
+  message: z.string().min(1),
+  createdAt: z.date(),
+  resolvedAt: z.date().nullable(),
+});
+
+export const commandRecordSchema = z.object({
+  id: z.uuid(),
+  workspaceId: workspaceIdSchema,
+  commandId: z.string().min(1),
+  actor: z.string().min(1),
+  source: z.enum(COMMAND_SOURCES),
+  clientName: z.string().nullable(),
+  operation: z.enum(OPERATION_NAMES),
+  resourceId: resourceIdSchema,
+  arguments: jsonObjectSchema,
+  secondaryResourceId: resourceIdSchema.nullable(),
+  reversingEventId: z.uuid().nullable(),
+  expectedVersion: z.number().int().positive(),
+  reason: z.string().min(1),
+  readback: z.string().min(1),
+  status: z.enum(COMMAND_STATUSES),
+  eventId: z.uuid().nullable(),
+  expiresAt: z.date(),
+  createdAt: z.date(),
+  resolvedAt: z.date().nullable(),
 });

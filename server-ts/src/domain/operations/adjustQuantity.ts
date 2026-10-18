@@ -15,13 +15,14 @@ export const adjustQuantity = defineOperation({
   name: 'ADJUST_QUANTITY',
   targetTypes: ['inventory_item'],
   argsSchema,
-  plan({ delta }, resource, settings) {
+  plan({ delta }, resource, { settings }) {
     if (resource.type !== 'inventory_item') {
       return { kind: 'rejected', code: 'INVALID_TARGET', message: `${resource.name} is not an inventory item.` };
     }
     const { quantity, unit } = resource.attributes;
     const amount = Math.abs(delta);
     const verb = delta > 0 ? 'Added' : 'Removed';
+    const preposition = delta > 0 ? 'to' : 'from';
 
     if (amount > settings.maxAdjustment) {
       return {
@@ -38,27 +39,28 @@ export const adjustQuantity = defineOperation({
         message: `Cannot remove ${String(amount)} ${unit} of ${resource.name}: only ${String(quantity)} in stock.`,
       };
     }
+
+    let confirmation: { reason: string; readback: string } | undefined;
     if (amount >= settings.largeAdjustThreshold) {
-      return {
-        kind: 'needs_confirmation',
+      confirmation = {
         reason: 'large_adjustment',
-        readback: `${verb} ${String(amount)} ${unit} ${delta > 0 ? 'to' : 'from'} ${resource.name} (${String(quantity)} to ${String(newQuantity)})?`,
+        readback: `${verb} ${String(amount)} ${unit} ${preposition} ${resource.name} (${String(quantity)} to ${String(newQuantity)})?`,
       };
-    }
-    if (newQuantity === 0) {
-      return {
-        kind: 'needs_confirmation',
+    } else if (newQuantity === 0) {
+      confirmation = {
         reason: 'reaches_zero',
-        readback: `${verb} ${String(amount)} ${unit} ${delta > 0 ? 'to' : 'from'} ${resource.name}, leaving none in stock?`,
+        readback: `${verb} ${String(amount)} ${unit} ${preposition} ${resource.name}, leaving none in stock?`,
       };
     }
+
     return {
       kind: 'ready',
       attributes: { ...resource.attributes, quantity: newQuantity },
       before: { quantity },
       after: { quantity: newQuantity },
-      summary: `${verb} ${String(amount)} ${unit} ${delta > 0 ? 'to' : 'from'} ${resource.name} (${String(quantity)} to ${String(newQuantity)})`,
+      summary: `${verb} ${String(amount)} ${unit} ${preposition} ${resource.name} (${String(quantity)} to ${String(newQuantity)})`,
       spoken: `${verb} ${String(amount)}. ${resource.name} is now at ${String(newQuantity)} ${unit}.`,
+      ...(confirmation ? { confirmation } : {}),
     };
   },
 });

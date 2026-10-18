@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { main, type MainDeps } from '../../src/main.js';
 import { SERVER_NAME, SERVER_VERSION } from '../../src/version.js';
-import { createTestPool, resetWarehouse, TEST_DATABASE_URL, WORKSPACE_ID } from '../helpers/db.js';
+import { createTestPool, resetAll, TEST_DATABASE_URL, WORKSPACE_ID } from '../helpers/db.js';
 
 class FakeProcess extends EventEmitter {
   readonly exit = vi.fn<(code: number) => void>();
@@ -78,7 +78,7 @@ async function handshake(h: Harness): Promise<void> {
 beforeEach(async () => {
   const pool = createTestPool();
   try {
-    await resetWarehouse(pool);
+    await resetAll(pool);
   } finally {
     await pool.end();
   }

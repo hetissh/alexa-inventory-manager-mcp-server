@@ -35,10 +35,12 @@ export async function createServices(config: Config, logger: Logger): Promise<Se
       );
     }
     await assertSchemaUpToDate(pool);
-    if (!(await store.getWorkspace(config.workspaceId))) {
-      throw new Error(
-        `Workspace "${config.workspaceId}" was not found. Run "npm run db:setup" in server-ts to create the demo workspace, or set VOICEOPS_WORKSPACE.`,
-      );
+    for (const workspaceId of config.workspaceIds) {
+      if (!(await store.getWorkspace(workspaceId))) {
+        throw new Error(
+          `Workspace "${workspaceId}" was not found. Run "npm run db:setup" in server-ts to create the demo workspaces, or fix VOICEOPS_WORKSPACE / VOICEOPS_WORKSPACES.`,
+        );
+      }
     }
     return {
       pool,

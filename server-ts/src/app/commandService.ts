@@ -1,20 +1,17 @@
-import { canonicalJson } from '../domain/json.js';
-import { type Candidate, resolveResource } from '../domain/matcher.js';
+import { resolveResource } from '../domain/matcher.js';
 import { getOperation } from '../domain/operations/registry.js';
-import type { BoundOperation, Operation, RejectionCode } from '../domain/operations/types.js';
-import type { Resource } from '../domain/schemas.js';
-import type {
-  CommandSource,
-  EventRecord,
-  OperationName,
-  SyncStatus,
-  Workspace,
-  WorkspaceSettings,
-} from '../domain/types.js';
+import type { SecondaryReference } from '../domain/operations/types.js';
+import type { Resource, ResourceType } from '../domain/schemas.js';
+import type { CommandSource, EventRecord, OperationName, Workspace } from '../domain/types.js';
 import { getTemplate } from '../templates/index.js';
-import { DuplicateCommandError, WorkspaceNotFoundError } from './errors.js';
-import type { AppLogger, Store, TransactionStore } from './ports.js';
-import { spokenAmbiguous, spokenCommitted, spokenNotFound, spokenReplayed } from './spoken.js';
+import { ALREADY_UNDONE_MESSAGE, DUPLICATE_MESSAGE, type Prepared, replay, runCommand } from './commit.js';
+import { generateToken, hashToken } from './confirmationCode.js';
+import { AlreadyReversedError, DuplicateCommandError, WorkspaceNotFoundError } from './errors.js';
+import { type CommandOutcome, conflict, rejected } from './outcomes.js';
+import type { AppLogger, Store } from './ports.js';
+import { spokenAmbiguous, spokenNotFound } from './spoken.js';
+
+export type { AlertChanges, CommandOutcome, ConfirmationPrompt, SyncSummary } from './outcomes.js';
 
 export interface CommandRequest {
   /** Idempotency key: a repeated identical request with the same ID is applied once. */
@@ -24,142 +21,111 @@ export interface CommandRequest {
   readonly source: CommandSource;
   readonly clientName: string | null;
   readonly operation: OperationName;
-  /** Spoken or typed name (or ID) of the resource to change. */
+  /** Spoken or typed name (or ID) of the resource to change. Ignored by operations that undo the actor's last change. */
   readonly target: string;
   /** Operation-specific arguments, validated by the operation itself. */
   readonly arguments: unknown;
 }
 
-export interface SyncSummary {
-  readonly sheets: SyncStatus | 'not_configured';
+/** Says yes to, or declines, a change that is waiting for confirmation. */
+export interface ConfirmationRequest {
+  readonly workspaceId: string;
+  /** Must be the actor who asked for the change. */
+  readonly actorId: string;
+  readonly token: string;
 }
 
-export type CommandOutcome =
-  | {
-      readonly status: 'committed';
-      /** True when this request had already been applied and nothing new was written. */
-      readonly replayed: boolean;
-      readonly event: EventRecord;
-      readonly resource: Resource;
-      readonly sync: SyncSummary;
-      readonly spoken: string;
-    }
-  | {
-      readonly status: 'ambiguous';
-      readonly query: string;
-      readonly candidates: readonly Candidate[];
-      readonly spoken: string;
-    }
-  | { readonly status: 'not_found'; readonly query: string; readonly spoken: string }
-  | { readonly status: 'rejected'; readonly code: RejectionCode; readonly message: string; readonly spoken: string }
-  | { readonly status: 'conflict'; readonly message: string; readonly spoken: string };
+export interface CommandServiceOptions {
+  /** How long a person has to say yes. Default 120 seconds. */
+  readonly ttlSeconds?: number;
+  readonly now?: () => Date;
+  readonly generateToken?: () => string;
+}
 
 export interface CommandService {
+  /** Applies a change, or parks it and returns `confirmation_required` if it needs a human yes. */
   execute(request: CommandRequest): Promise<CommandOutcome>;
+  confirm(request: ConfirmationRequest): Promise<CommandOutcome>;
+  cancel(request: ConfirmationRequest): Promise<CommandOutcome>;
 }
 
-interface CommitContext {
-  readonly request: CommandRequest;
-  readonly workspace: Workspace;
-  readonly settings: WorkspaceSettings;
-  readonly operation: Operation;
-  readonly bound: BoundOperation;
-  readonly resourceId: string;
+const DEFAULT_TTL_SECONDS = 120;
+const UNKNOWN_MESSAGE = 'That confirmation is not valid. Ask for the change again.';
+const EXPIRED_MESSAGE = 'That confirmation expired. Ask for the change again.';
+
+function ofTypes(resources: readonly Resource[], types: readonly ResourceType[]): Resource[] {
+  return resources.filter((resource) => types.includes(resource.type));
 }
 
-function rejected(code: RejectionCode, message: string): CommandOutcome {
-  return { status: 'rejected', code, message, spoken: message };
-}
-
-function conflict(message: string): CommandOutcome {
-  return { status: 'conflict', message, spoken: message };
-}
-
-const DUPLICATE_MESSAGE =
-  'That idempotency key was already used for a different request. Use a new key for a new request, or repeat the original request exactly.';
-
-async function replay(
-  tx: TransactionStore,
-  context: CommitContext,
-  existing: EventRecord,
-  resource: Resource,
-): Promise<CommandOutcome> {
-  const sameRequest =
-    existing.resourceId === resource.id &&
-    // OPERATION_NAMES has one member today, so the types see this as always true; it matters once there are more.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    existing.operation === context.operation.name &&
-    canonicalJson(existing.arguments) === canonicalJson(context.bound.arguments);
-  if (!sameRequest) {
-    return conflict(DUPLICATE_MESSAGE);
+/** Turns the database's "this key/event was already used" errors into a conflict result. */
+async function guarded(work: () => Promise<CommandOutcome>): Promise<CommandOutcome> {
+  try {
+    return await work();
+  } catch (error) {
+    if (error instanceof DuplicateCommandError) {
+      return conflict(DUPLICATE_MESSAGE);
+    }
+    if (error instanceof AlreadyReversedError) {
+      return conflict(ALREADY_UNDONE_MESSAGE);
+    }
+    throw error;
   }
-  const sheets = (await tx.getSyncStatus(existing.eventId, 'sheets')) ?? 'not_configured';
-  return {
-    status: 'committed',
-    replayed: true,
-    event: existing,
-    resource,
-    sync: { sheets },
-    spoken: spokenReplayed(existing.summary, sheets),
-  };
 }
 
-/** Runs inside one transaction: lock, re-validate against fresh state, then write event + state + outbox together. */
-async function commit(tx: TransactionStore, context: CommitContext): Promise<CommandOutcome> {
-  const { request, workspace, bound, operation } = context;
-  const locked = await tx.lockResource(workspace.id, context.resourceId);
-  if (!locked) {
-    return rejected('INVALID_TARGET', 'That resource no longer exists.');
+export function createCommandService(
+  store: Store,
+  logger: AppLogger,
+  options: CommandServiceOptions = {},
+): CommandService {
+  const ttlMs = (options.ttlSeconds ?? DEFAULT_TTL_SECONDS) * 1000;
+  const now = options.now ?? ((): Date => new Date());
+  const newToken = options.generateToken ?? generateToken;
+
+  async function load(workspaceId: string): Promise<{ workspace: Workspace; resources: Resource[]; names: Map<string, string> }> {
+    const workspace = await store.getWorkspace(workspaceId);
+    if (!workspace) {
+      throw new WorkspaceNotFoundError(workspaceId);
+    }
+    const resources = await store.listResources(workspace.id);
+    return { workspace, resources, names: new Map(resources.map((resource) => [resource.id, resource.name])) };
   }
 
-  const existing = await tx.findEventByCommandId(workspace.id, request.commandId);
-  if (existing) {
-    return replay(tx, context, existing, locked);
-  }
-
-  const plan = bound.plan(locked, context.settings);
-  if (plan.kind === 'rejected') {
-    return rejected(plan.code, plan.message);
-  }
-  if (plan.kind === 'needs_confirmation') {
-    return rejected(
-      'CONFIRMATION_UNSUPPORTED',
-      `${plan.readback} This change needs explicit confirmation, which this version of VoiceOps cannot collect yet, so nothing was changed.`,
+  function log(fields: Record<string, unknown>, outcome: CommandOutcome, message: string): void {
+    logger.info(
+      {
+        ...fields,
+        status: outcome.status,
+        replayed: outcome.status === 'committed' ? outcome.replayed : undefined,
+        eventId: outcome.status === 'committed' ? outcome.event.eventId : undefined,
+      },
+      message,
     );
   }
 
-  const event = await tx.insertEvent({
-    workspaceId: workspace.id,
-    commandId: request.commandId,
-    resourceId: locked.id,
-    operation: operation.name,
-    arguments: bound.arguments,
-    before: plan.before,
-    after: plan.after,
-    summary: plan.summary,
-    actor: request.actorId,
-    source: request.source,
-    clientName: request.clientName,
-  });
-  const resource = await tx.updateResourceAttributes(workspace.id, locked.id, plan.attributes, locked.version);
-  await tx.bumpBoardVersion(workspace.id);
-
-  let sheets: SyncSummary['sheets'] = 'not_configured';
-  if (workspace.integrations.sheets) {
-    await tx.enqueueSync(workspace.id, event.eventId, 'sheets');
-    sheets = 'pending';
+  /** Resolves the user's words for the second resource (the technician), or says why it can't. */
+  function resolveSecondary(
+    reference: SecondaryReference & { readonly query: string },
+    resources: readonly Resource[],
+  ): { outcome: CommandOutcome } | { resource: Resource } {
+    const { query, role } = reference;
+    const resolution = resolveResource(query, ofTypes(resources, reference.types), { autoResolveFuzzy: false });
+    if (resolution.kind === 'resolved') {
+      return { resource: resolution.match.resource };
+    }
+    if (resolution.kind === 'not_found') {
+      return { outcome: { status: 'not_found', query, role, spoken: spokenNotFound(query) } };
+    }
+    return {
+      outcome: {
+        status: 'ambiguous',
+        query,
+        role,
+        candidates: resolution.candidates,
+        spoken: spokenAmbiguous(query, resolution.candidates),
+      },
+    };
   }
-  return {
-    status: 'committed',
-    replayed: false,
-    event,
-    resource,
-    sync: { sheets },
-    spoken: spokenCommitted(plan.spoken, sheets),
-  };
-}
 
-export function createCommandService(store: Store, logger: AppLogger): CommandService {
   return {
     async execute(request) {
       const operation = getOperation(request.operation);
@@ -167,57 +133,167 @@ export function createCommandService(store: Store, logger: AppLogger): CommandSe
       if (!binding.ok) {
         return rejected('INVALID_ARGUMENT', binding.message);
       }
+      const { workspace, resources, names } = await load(request.workspaceId);
 
-      const workspace = await store.getWorkspace(request.workspaceId);
-      if (!workspace) {
-        throw new WorkspaceNotFoundError(request.workspaceId);
+      let target: Resource | undefined;
+      let reversing: EventRecord | undefined;
+      if (operation.targetsLastEvent) {
+        reversing = await store.findLastReversibleEvent(workspace.id, request.actorId);
+        if (!reversing) {
+          return rejected('NOTHING_TO_UNDO', 'There is nothing to undo.');
+        }
+        const resourceId = reversing.resourceId;
+        target = resources.find((resource) => resource.id === resourceId);
+        if (!target) {
+          return rejected('INVALID_TARGET', 'The resource that change affected no longer exists.');
+        }
+      } else {
+        // Writes never auto-resolve typo-level matches: ask rather than change the wrong record.
+        const resolution = resolveResource(request.target, ofTypes(resources, operation.targetTypes), {
+          autoResolveFuzzy: false,
+        });
+        if (resolution.kind === 'not_found') {
+          return { status: 'not_found', query: request.target, spoken: spokenNotFound(request.target) };
+        }
+        if (resolution.kind === 'ambiguous') {
+          return {
+            status: 'ambiguous',
+            query: request.target,
+            candidates: resolution.candidates,
+            spoken: spokenAmbiguous(request.target, resolution.candidates),
+          };
+        }
+        target = resolution.match.resource;
       }
 
-      // Writes never auto-resolve typo-level matches: ask rather than change the wrong record.
-      const resources = await store.listResources(workspace.id, { types: operation.targetTypes });
-      const resolution = resolveResource(request.target, resources, { autoResolveFuzzy: false });
-      if (resolution.kind === 'not_found') {
-        return { status: 'not_found', query: request.target, spoken: spokenNotFound(request.target) };
-      }
-      if (resolution.kind === 'ambiguous') {
-        return {
-          status: 'ambiguous',
-          query: request.target,
-          candidates: resolution.candidates,
-          spoken: spokenAmbiguous(request.target, resolution.candidates),
-        };
+      let secondary: Resource | undefined;
+      if (binding.bound.secondary) {
+        const resolved = resolveSecondary(binding.bound.secondary, resources);
+        if ('outcome' in resolved) {
+          return resolved.outcome;
+        }
+        secondary = resolved.resource;
       }
 
-      const context: CommitContext = {
-        request,
+      const prepared: Prepared = {
         workspace,
         settings: getTemplate(workspace.template).settings,
         operation,
         bound: binding.bound,
-        resourceId: resolution.match.resource.id,
+        commandId: request.commandId,
+        actor: request.actorId,
+        source: request.source,
+        clientName: request.clientName,
+        resourceId: target.id,
+        secondary,
+        names,
+        reversing,
       };
-      let outcome: CommandOutcome;
-      try {
-        outcome = await store.withTransaction((tx) => commit(tx, context));
-      } catch (error) {
-        if (!(error instanceof DuplicateCommandError)) {
-          throw error;
-        }
-        outcome = conflict(DUPLICATE_MESSAGE);
-      }
-
-      logger.info(
+      const token = newToken();
+      const prompt = { token, tokenHash: hashToken(token), expiresAt: new Date(now().getTime() + ttlMs) };
+      const outcome = await guarded(() =>
+        store.withTransaction((tx) => runCommand(tx, prepared, { kind: 'propose', prompt })),
+      );
+      log(
         {
           workspaceId: workspace.id,
           commandId: request.commandId,
           operation: request.operation,
           actor: request.actorId,
           source: request.source,
-          status: outcome.status,
-          replayed: outcome.status === 'committed' ? outcome.replayed : undefined,
-          eventId: outcome.status === 'committed' ? outcome.event.eventId : undefined,
         },
+        outcome,
         'command processed',
+      );
+      return outcome;
+    },
+
+    async confirm(request) {
+      const { workspace, resources, names } = await load(request.workspaceId);
+      const found = await store.findCommandByTokenHash(workspace.id, hashToken(request.token));
+      if (found?.actor !== request.actorId) {
+        return rejected('UNKNOWN_CONFIRMATION', UNKNOWN_MESSAGE);
+      }
+      const operation = getOperation(found.operation);
+      const binding = operation.bind(found.arguments);
+      const secondary = resources.find((resource) => resource.id === found.secondaryResourceId);
+      const reversing = found.reversingEventId ? await store.getEvent(workspace.id, found.reversingEventId) : undefined;
+
+      const outcome = await guarded(() =>
+        store.withTransaction(async (tx) => {
+          // Re-read under a lock: two confirmations arriving together must not both apply the change.
+          const command = await tx.lockCommand(found.id);
+          if (command.status === 'cancelled') {
+            return rejected('CONFIRMATION_CANCELLED', 'That change was cancelled, so nothing was done.');
+          }
+          if (command.status === 'expired') {
+            return rejected('CONFIRMATION_EXPIRED', EXPIRED_MESSAGE);
+          }
+          if (command.status === 'pending' && command.expiresAt.getTime() <= now().getTime()) {
+            await tx.updateCommandStatus(command.id, 'expired', null);
+            return rejected('CONFIRMATION_EXPIRED', EXPIRED_MESSAGE);
+          }
+          if (!binding.ok) {
+            await tx.updateCommandStatus(found.id, 'cancelled', null);
+            return rejected('INVALID_ARGUMENT', binding.message);
+          }
+          const prepared: Prepared = {
+            workspace,
+            settings: getTemplate(workspace.template).settings,
+            operation,
+            bound: binding.bound,
+            commandId: found.commandId,
+            actor: found.actor,
+            source: found.source,
+            clientName: found.clientName,
+            resourceId: found.resourceId,
+            secondary,
+            names,
+            reversing,
+          };
+          if (command.status === 'confirmed') {
+            // Already applied (a retry, or a second confirmation racing the first): return the original result.
+            const event = await tx.findEventByCommandId(workspace.id, found.commandId);
+            const resource = await tx.lockResource(workspace.id, found.resourceId);
+            if (event && resource) {
+              return replay(tx, prepared, event, resource);
+            }
+            return rejected('ALREADY_CONFIRMED', 'That change was already applied.');
+          }
+          return runCommand(tx, prepared, { kind: 'confirm', command });
+        }),
+      );
+      log(
+        { workspaceId: workspace.id, commandId: found.commandId, operation: found.operation, actor: request.actorId },
+        outcome,
+        'confirmation processed',
+      );
+      return outcome;
+    },
+
+    async cancel(request) {
+      const workspace = await store.getWorkspace(request.workspaceId);
+      if (!workspace) {
+        throw new WorkspaceNotFoundError(request.workspaceId);
+      }
+      const found = await store.findCommandByTokenHash(workspace.id, hashToken(request.token));
+      if (found?.actor !== request.actorId) {
+        return rejected('UNKNOWN_CONFIRMATION', UNKNOWN_MESSAGE);
+      }
+      const outcome = await store.withTransaction(async (tx): Promise<CommandOutcome> => {
+        const command = await tx.lockCommand(found.id);
+        if (command.status === 'confirmed') {
+          return rejected('ALREADY_CONFIRMED', 'That change was already applied. Use undo-last-change to reverse it.');
+        }
+        if (command.status === 'pending') {
+          await tx.updateCommandStatus(command.id, 'cancelled', null);
+        }
+        return { status: 'cancelled', spoken: 'Okay, cancelled. Nothing was changed.' };
+      });
+      log(
+        { workspaceId: workspace.id, commandId: found.commandId, operation: found.operation, actor: request.actorId },
+        outcome,
+        'cancellation processed',
       );
       return outcome;
     },

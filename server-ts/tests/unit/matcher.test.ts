@@ -3,10 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   diceCoefficient,
   rankResources,
+  type ResolveOptions,
   resolveResource,
   toCandidate,
 } from '../../src/domain/matcher.js';
-import { inventoryItem, warehouseResources } from '../helpers/resources.js';
+import { cafeResources, inventoryItem, repairResources, warehouseResources } from '../helpers/resources.js';
 
 const writes = { autoResolveFuzzy: false } as const;
 const reads = { autoResolveFuzzy: true } as const;
@@ -182,5 +183,43 @@ describe('toCandidate', () => {
       matchedBy: 'name',
       score: 1,
     });
+  });
+});
+
+describe('the repair shop and the cafe', () => {
+  const asRepair = (query: string, options: ResolveOptions = writes): ReturnType<typeof resolveResource> =>
+    resolveResource(query, repairResources(), options);
+
+  it('understands "job one oh eight" and "job 108" as the same job, and never confuses neighbours', () => {
+    for (const query of ['job one oh eight', 'Job 108', 'job one-oh-eight']) {
+      expect(asRepair(query)).toMatchObject({ kind: 'resolved', match: { resource: { id: 'job_108' } } });
+    }
+    expect(asRepair('job 111', reads)).toEqual({ kind: 'not_found' });
+    expect(asRepair('job one oh nine', reads)).toMatchObject({ match: { resource: { id: 'job_109' } } });
+  });
+
+  it('asks which job when only "job" is said', () => {
+    const resolution = asRepair('job');
+    expect(resolution.kind === 'ambiguous' && resolution.candidates.map((c) => c.id)).toEqual([
+      'job_107',
+      'job_108',
+      'job_109',
+      'job_110',
+    ]);
+  });
+
+  it('finds a technician by first name', () => {
+    expect(asRepair('rahul')).toMatchObject({ match: { resource: { id: 'tech_rahul' } } });
+  });
+
+  it('asks which biryani when only "biryani" is said, and resolves the full name', () => {
+    expect(resolveResource('biryani', cafeResources(), writes)).toMatchObject({
+      kind: 'ambiguous',
+      candidates: [{ name: 'Chicken Biryani' }, { name: 'Veg Biryani' }],
+    });
+    expect(resolveResource('chicken biryani', cafeResources(), writes)).toMatchObject({
+      match: { resource: { id: 'menu_chicken_biryani' } },
+    });
+    expect(resolveResource('lime soda', cafeResources(), writes)).toMatchObject({ match: { matchedBy: 'name' } });
   });
 });

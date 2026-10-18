@@ -1,12 +1,19 @@
+import { COMMON_SETTINGS } from './shared.js';
 import type { Template } from './types.js';
 
 // Fictional demo data only (no real client information).
 export const warehouseTemplate: Template = {
   id: 'warehouse',
   label: 'Warehouse',
-  settings: { largeAdjustThreshold: 100, maxAdjustment: 10_000 },
-  equipmentStatuses: ['available', 'maintenance', 'out_of_service'],
+  settings: COMMON_SETTINGS,
   workspace: { id: 'northside-warehouse', name: 'Northside Operations', timezone: 'Asia/Kolkata' },
+  board: {
+    title: 'Northside Operations',
+    metrics: [
+      { label: 'Low stock', kind: 'low_stock' },
+      { label: 'Equipment down', kind: 'equipment_unavailable' },
+    ],
+  },
   resources: [
     {
       id: 'item_air_filter',

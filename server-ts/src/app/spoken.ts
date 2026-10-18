@@ -1,6 +1,8 @@
+import type { BoardMetric } from '../domain/board.js';
 import type { Candidate } from '../domain/matcher.js';
 import type { Resource } from '../domain/schemas.js';
-import type { SyncStatus } from '../domain/types.js';
+import { type SyncStatus } from '../domain/types.js';
+import type { AlertChanges } from './outcomes.js';
 
 // Sentences meant to be read aloud. They live here (not in the MCP layer) so a future Alexa
 // adapter says exactly the same thing.
@@ -33,8 +35,21 @@ function spokenSync(sheets: SyncStatus | 'not_configured'): string {
   }
 }
 
-export function spokenCommitted(sentence: string, sheets: SyncStatus | 'not_configured'): string {
-  return `${sentence}${spokenSync(sheets)}`;
+function spokenAlertChanges({ opened, resolved }: AlertChanges): string {
+  return [
+    ...opened.map((alert) => `Alert: ${alert.message}`),
+    ...resolved.map((alert) => `Alert cleared for ${alert.resourceName}.`),
+  ]
+    .map((sentence) => ` ${sentence}`)
+    .join('');
+}
+
+export function spokenCommitted(
+  sentence: string,
+  sheets: SyncStatus | 'not_configured',
+  alerts: AlertChanges,
+): string {
+  return `${sentence}${spokenAlertChanges(alerts)}${spokenSync(sheets)}`;
 }
 
 export function spokenReplayed(summary: string, sheets: SyncStatus | 'not_configured'): string {
@@ -42,11 +57,24 @@ export function spokenReplayed(summary: string, sheets: SyncStatus | 'not_config
 }
 
 export function spokenResource(resource: Resource): string {
-  if (resource.type === 'inventory_item') {
-    const { quantity, unit, reorderLevel } = resource.attributes;
-    return `${resource.name}: ${String(quantity)} ${unit} in stock (reorder at ${String(reorderLevel)}).`;
+  switch (resource.type) {
+    case 'inventory_item': {
+      const { quantity, unit, reorderLevel } = resource.attributes;
+      return `${resource.name}: ${String(quantity)} ${unit} in stock (reorder at ${String(reorderLevel)}).`;
+    }
+    case 'equipment':
+      return `${resource.name} is ${resource.attributes.status.replaceAll('_', ' ')}.`;
+    case 'menu_item': {
+      const { price, currency, status } = resource.attributes;
+      return `${resource.name} (${String(price)} ${currency}) is ${status.replaceAll('_', ' ')}.`;
+    }
+    case 'job': {
+      const { status, description } = resource.attributes;
+      return `${resource.name} (${description}) is ${status.replaceAll('_', ' ')}.`;
+    }
+    case 'technician':
+      return `${resource.name} is ${resource.attributes.active ? 'on duty' : 'not on duty'}.`;
   }
-  return `${resource.name} is ${resource.attributes.status.replaceAll('_', ' ')}.`;
 }
 
 export function spokenEvents(count: number): string {
@@ -54,4 +82,20 @@ export function spokenEvents(count: number): string {
     return 'No changes have been recorded yet.';
   }
   return count === 1 ? 'Here is the most recent change.' : `Here are the ${String(count)} most recent changes.`;
+}
+
+export function spokenAlertList(count: number, status: 'open' | 'resolved' | 'all'): string {
+  const kind = status === 'all' ? '' : `${status} `;
+  if (count === 0) {
+    return `There are no ${kind}alerts.`;
+  }
+  return count === 1 ? `There is 1 ${kind}alert.` : `There are ${String(count)} ${kind}alerts.`;
+}
+
+export function spokenBoard(title: string, metrics: readonly BoardMetric[]): string {
+  return `${title}: ${metrics.map((metric) => `${metric.label} ${String(metric.value)}`).join(', ')}.`;
+}
+
+export function spokenWorkspace(name: string, label: string, resourceCount: number): string {
+  return `${name} is a ${label.toLowerCase()} workspace with ${String(resourceCount)} resources.`;
 }

@@ -4,12 +4,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createServices } from '../../src/composition.js';
 import type { Config } from '../../src/config.js';
 import { ensureDatabase } from '../../src/infra/db/admin.js';
-import { createTestPool, resetWarehouse, TEST_DATABASE_URL, withTempDatabase,WORKSPACE_ID } from '../helpers/db.js';
+import {
+  ALL_WORKSPACE_IDS,
+  createTestPool,
+  resetAll,
+  TEST_DATABASE_URL,
+  withTempDatabase,
+  WORKSPACE_ID,
+} from '../helpers/db.js';
 
 const config = (overrides: Partial<Config> = {}): Config => ({
   logLevel: 'silent',
   databaseUrl: TEST_DATABASE_URL,
   workspaceId: WORKSPACE_ID,
+  workspaceIds: [WORKSPACE_ID],
   actorId: 'manager-1',
   ...overrides,
 });
@@ -17,7 +25,7 @@ const config = (overrides: Partial<Config> = {}): Config => ({
 beforeEach(async () => {
   const pool = createTestPool();
   try {
-    await resetWarehouse(pool);
+    await resetAll(pool);
   } finally {
     await pool.end();
   }
@@ -67,7 +75,21 @@ describe('createServices', () => {
 
   it('refuses a workspace that does not exist, and says how to fix it', async () => {
     await expect(
-      createServices(config({ workspaceId: 'no-such-workspace' }), pino({ level: 'silent' })),
+      createServices(
+        config({ workspaceId: 'no-such-workspace', workspaceIds: ['no-such-workspace'] }),
+        pino({ level: 'silent' }),
+      ),
     ).rejects.toThrow(/Workspace "no-such-workspace" was not found.*db:setup/);
+  });
+
+  it('checks every workspace on the allow-list, not just the default', async () => {
+    await expect(
+      createServices(config({ workspaceIds: [WORKSPACE_ID, 'no-such-workspace'] }), pino({ level: 'silent' })),
+    ).rejects.toThrow(/Workspace "no-such-workspace" was not found/);
+  });
+
+  it('accepts an allow-list of several workspaces that all exist', async () => {
+    const services = await createServices(config({ workspaceIds: ALL_WORKSPACE_IDS }), pino({ level: 'silent' }));
+    await services.close();
   });
 });

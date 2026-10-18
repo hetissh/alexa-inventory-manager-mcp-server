@@ -7,7 +7,7 @@ import { createServices, type Services } from '../../src/composition.js';
 import { createMcpServer } from '../../src/mcp/server.js';
 import type { ToolContext } from '../../src/mcp/tools/context.js';
 import { registerTools } from '../../src/mcp/tools/index.js';
-import { createTestPool, resetWarehouse, TEST_DATABASE_URL, WORKSPACE_ID } from './db.js';
+import { ALL_WORKSPACE_IDS, createTestPool, resetAll, TEST_DATABASE_URL, WORKSPACE_ID } from './db.js';
 
 export const silentLogger = pino({ level: 'silent' });
 
@@ -21,16 +21,22 @@ export interface ConnectedPair {
   close(): Promise<void>;
 }
 
-/** Restores the warehouse fixture and opens real services against the test database. */
+/** Restores every demo workspace and opens real services against the test database. */
 async function openServices(): Promise<Services> {
   const pool = createTestPool();
   try {
-    await resetWarehouse(pool);
+    await resetAll(pool);
   } finally {
     await pool.end();
   }
   return createServices(
-    { logLevel: 'silent', databaseUrl: TEST_DATABASE_URL, workspaceId: WORKSPACE_ID, actorId: TEST_ACTOR },
+    {
+      logLevel: 'silent',
+      databaseUrl: TEST_DATABASE_URL,
+      workspaceId: WORKSPACE_ID,
+      workspaceIds: ALL_WORKSPACE_IDS,
+      actorId: TEST_ACTOR,
+    },
     silentLogger,
   );
 }
@@ -58,7 +64,8 @@ export async function connectInMemory(): Promise<ConnectedPair> {
     logger: silentLogger,
     uptimeSeconds: () => 42.9,
     nodeVersion: 'v24.0.0-test',
-    workspaceId: WORKSPACE_ID,
+    defaultWorkspaceId: WORKSPACE_ID,
+    workspaceIds: ALL_WORKSPACE_IDS,
     actorId: TEST_ACTOR,
     commands: services.commands,
     reads: services.reads,
@@ -78,7 +85,8 @@ export async function connectWithContext(
     uptimeSeconds: () => 1,
     nodeVersion: 'v24.0.0-test',
     getClientInfo: () => TEST_CLIENT_INFO,
-    workspaceId: WORKSPACE_ID,
+    defaultWorkspaceId: WORKSPACE_ID,
+    workspaceIds: ALL_WORKSPACE_IDS,
     actorId: TEST_ACTOR,
     commands: services.commands,
     reads: services.reads,

@@ -5,21 +5,28 @@ import type { Pool } from 'pg';
 import { dropDatabase, ensureDatabase } from '../../src/infra/db/admin.js';
 import { createPool } from '../../src/infra/db/pool.js';
 import { seedWorkspace } from '../../src/infra/db/seed.js';
+import { cafeTemplate } from '../../src/templates/cafe.js';
+import { listTemplates } from '../../src/templates/index.js';
+import { repairTemplate } from '../../src/templates/repair.js';
 import { warehouseTemplate } from '../../src/templates/warehouse.js';
 
 export const DEFAULT_TEST_DATABASE_URL = 'postgresql://localhost:5432/voiceops_test';
 export const TEST_DATABASE_URL = process.env['TEST_DATABASE_URL'] ?? DEFAULT_TEST_DATABASE_URL;
 export const WORKSPACE_ID = warehouseTemplate.workspace.id;
+export const CAFE_ID = cafeTemplate.workspace.id;
+export const REPAIR_ID = repairTemplate.workspace.id;
+export const ALL_WORKSPACE_IDS = listTemplates().map((template) => template.workspace.id);
 
 export function createTestPool(url: string = TEST_DATABASE_URL): Pool {
   return createPool(url, () => undefined);
 }
 
-/** Restores the warehouse fixture in the shared test database. */
-export async function resetWarehouse(pool: Pool): Promise<void> {
-  await seedWorkspace(pool, warehouseTemplate, { reset: true });
-  // Reset keeps integrations (they are configuration); tests that configure one must not leak it.
-  await pool.query(`UPDATE workspaces SET integrations = '{}'::jsonb WHERE id = $1`, [WORKSPACE_ID]);
+/** Restores every demo workspace (warehouse, cafe, repair) to its fixture and clears integrations. */
+export async function resetAll(pool: Pool): Promise<void> {
+  for (const template of listTemplates()) {
+    await seedWorkspace(pool, template, { reset: true });
+  }
+  await pool.query(`UPDATE workspaces SET integrations = '{}'::jsonb`);
 }
 
 export function urlForDatabase(baseUrl: string, database: string): string {

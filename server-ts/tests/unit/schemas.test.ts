@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { canonicalJson } from '../../src/domain/json.js';
 import {
   actorIdSchema,
+  alertRecordSchema,
+  commandRecordSchema,
   equipmentAttributesSchema,
   eventRecordSchema,
   inventoryAttributesSchema,
@@ -143,5 +145,86 @@ describe('canonicalJson', () => {
 
   it('distinguishes different values', () => {
     expect(canonicalJson({ delta: 20 })).not.toBe(canonicalJson({ delta: 21 }));
+  });
+});
+
+describe('menu items, jobs and technicians', () => {
+  const base = { aliases: [] };
+
+  it('menu items need a price and a three-letter currency', () => {
+    const item = { ...base, id: 'menu_dosa', type: 'menu_item', name: 'Dosa', attributes: { price: 120, currency: 'INR', status: 'available' } };
+    expect(resourceSeedSchema.safeParse(item).success).toBe(true);
+    expect(resourceSeedSchema.safeParse({ ...item, attributes: { ...item.attributes, price: -1 } }).success).toBe(false);
+    expect(resourceSeedSchema.safeParse({ ...item, attributes: { ...item.attributes, currency: 'rupees' } }).success).toBe(false);
+  });
+
+  it('jobs need a known status, an assignee id or null, and a short description', () => {
+    const job = { ...base, id: 'job_108', type: 'job', name: 'Job 108', attributes: { status: 'waiting', assigneeId: null, description: 'Brakes' } };
+    expect(resourceSeedSchema.safeParse(job).success).toBe(true);
+    expect(resourceSeedSchema.safeParse({ ...job, attributes: { ...job.attributes, assigneeId: 'tech_rahul' } }).success).toBe(true);
+    expect(resourceSeedSchema.safeParse({ ...job, attributes: { ...job.attributes, status: 'stuck' } }).success).toBe(false);
+    expect(resourceSeedSchema.safeParse({ ...job, attributes: { ...job.attributes, assigneeId: 'Not An Id' } }).success).toBe(false);
+    expect(resourceSeedSchema.safeParse({ ...job, attributes: { ...job.attributes, description: '<b>x</b>' } }).success).toBe(false);
+  });
+
+  it('technicians need an active flag', () => {
+    const technician = { ...base, id: 'tech_rahul', type: 'technician', name: 'Rahul', attributes: { active: true } };
+    expect(resourceSeedSchema.safeParse(technician).success).toBe(true);
+    expect(resourceSeedSchema.safeParse({ ...technician, attributes: { active: 'yes' } }).success).toBe(false);
+  });
+
+  it('a persisted resource of each type parses', () => {
+    const persisted = { workspaceId: 'northside-warehouse', version: 1, updatedAt: new Date(), aliases: [] };
+    for (const resource of [
+      { id: 'menu_dosa', type: 'menu_item', name: 'Dosa', attributes: { price: 1, currency: 'INR', status: 'sold_out' } },
+      { id: 'job_108', type: 'job', name: 'Job 108', attributes: { status: 'done', assigneeId: 'tech_rahul', description: 'x' } },
+      { id: 'tech_rahul', type: 'technician', name: 'Rahul', attributes: { active: false } },
+    ]) {
+      expect(resourceSchema.safeParse({ ...persisted, ...resource }).success).toBe(true);
+    }
+  });
+});
+
+describe('alert and pending-change records', () => {
+  it('parse, and reject unknown rules or statuses', () => {
+    const alert = {
+      alertId: '0b7c3f5e-6d0a-4f0e-9a52-1b2d3c4e5f60',
+      workspaceId: 'northside-warehouse',
+      resourceId: 'item_brake_pads',
+      resourceName: 'Brake Pads',
+      rule: 'low_stock',
+      status: 'open',
+      message: 'low',
+      createdAt: new Date(),
+      resolvedAt: null,
+    };
+    expect(alertRecordSchema.safeParse(alert).success).toBe(true);
+    expect(alertRecordSchema.safeParse({ ...alert, rule: 'made_up' }).success).toBe(false);
+    expect(alertRecordSchema.safeParse({ ...alert, status: 'snoozed' }).success).toBe(false);
+
+    const command = {
+      id: '0b7c3f5e-6d0a-4f0e-9a52-1b2d3c4e5f61',
+      workspaceId: 'northside-warehouse',
+      commandId: 'cmd-1',
+      actor: 'manager-1',
+      source: 'mcp',
+      clientName: null,
+      operation: 'SET_STATUS',
+      resourceId: 'equipment_compressor_2',
+      arguments: { status: 'maintenance' },
+      secondaryResourceId: null,
+      reversingEventId: null,
+      expectedVersion: 1,
+      reason: 'status_change',
+      readback: 'Mark it?',
+      status: 'pending',
+      eventId: null,
+      expiresAt: new Date(),
+      createdAt: new Date(),
+      resolvedAt: null,
+    };
+    expect(commandRecordSchema.safeParse(command).success).toBe(true);
+    expect(commandRecordSchema.safeParse({ ...command, status: 'maybe' }).success).toBe(false);
+    expect(commandRecordSchema.safeParse({ ...command, expectedVersion: 0 }).success).toBe(false);
   });
 });

@@ -36,7 +36,7 @@ describe('db CLI', () => {
   it('migrates, then says the schema is up to date', async () => {
     await withTempDatabase(async (url) => {
       await ensureDatabase(url);
-      expect((await run(['migrate'], { DATABASE_URL: url })).lines).toEqual(['Applied migrations: 0001_init.']);
+      expect((await run(['migrate'], { DATABASE_URL: url })).lines).toEqual(['Applied migrations: 0001_init, 0002_confirmations_alerts.']);
       expect((await run(['migrate'], { DATABASE_URL: url })).lines).toEqual(['Schema is up to date.']);
     });
   });
@@ -58,8 +58,10 @@ describe('db CLI', () => {
       expect(first.code).toBe(0);
       expect(first.lines).toEqual([
         expect.stringMatching(/: created\.$/),
-        'Applied migrations: 0001_init.',
+        'Applied migrations: 0001_init, 0002_confirmations_alerts.',
         'Workspace northside-warehouse: 4 resource(s) added.',
+        'Workspace harbor-cafe: 5 resource(s) added.',
+        'Workspace eastside-repairs: 8 resource(s) added.',
       ]);
 
       const again = await run(['setup'], env);
@@ -67,13 +69,22 @@ describe('db CLI', () => {
         expect.stringMatching(/: exists\.$/),
         'Schema is up to date.',
         'Workspace northside-warehouse: 0 resource(s) added.',
+        'Workspace harbor-cafe: 0 resource(s) added.',
+        'Workspace eastside-repairs: 0 resource(s) added.',
       ]);
 
       const pool = createTestPool(url);
       try {
         await pool.query(`UPDATE resources SET attributes = jsonb_set(attributes, '{quantity}', '1') WHERE id = 'item_air_filter'`);
         const reset = await run(['reset'], env);
-        expect(reset).toEqual({ code: 0, lines: ['Workspace northside-warehouse: reset to the fixture.'] });
+        expect(reset).toEqual({
+          code: 0,
+          lines: [
+            'Workspace northside-warehouse: reset to the fixture.',
+            'Workspace harbor-cafe: reset to the fixture.',
+            'Workspace eastside-repairs: reset to the fixture.',
+          ],
+        });
         const restored = await pool.query<{ quantity: number }>(
           `SELECT (attributes->>'quantity')::int AS quantity FROM resources WHERE id = 'item_air_filter'`,
         );

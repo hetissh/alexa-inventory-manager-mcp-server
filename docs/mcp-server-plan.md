@@ -48,7 +48,7 @@ Claude Desktop / Code                later: Alexa Lambda · Dashboard · Fire TV
 
 **Operation registry.** Each operation is one file with five parts: an args schema, `validate(resource, args, config)`, `needsConfirmation(...)`, `apply(...)` and `readback(...)`. Adding an operation means adding a file. The café, warehouse and repair-shop templates are data only (types, allowed statuses, thresholds, board layout).
 
-**Layout** (as built through M1; `[M2]`/`[M3]` marks what is still to come). Import direction is enforced by ESLint (`domain ← templates ← app ← {infra, mcp}`); only `main.ts`, `composition.ts` and `cli/` wire layers together.
+**Layout** (as built through M2; `[M3]`/`[M4]` marks what is still to come). Import direction is enforced by ESLint (`domain ← templates ← app ← {infra, mcp}`); only `main.ts`, `composition.ts` and `cli/` wire layers together.
 
 ```text
 /
@@ -58,12 +58,13 @@ Claude Desktop / Code                later: Alexa Lambda · Dashboard · Fire TV
     package.json  tsconfig*.json  eslint.config.js  vitest.config.ts
     src/
       bin.ts  main.ts  composition.ts  config.ts  logger.ts  lifecycle.ts  stdout-guard.ts  errorMessage.ts  version.ts
-      mcp/        server.ts  views.ts  tools/{checkHealth,findResources,getResource,adjustQuantity,listEvents,context,index}.ts
+      mcp/        server.ts  views.ts  tools/{checkHealth,getWorkspace,findResources,getResource,getBoard,listEvents,listAlerts,
+                  adjustQuantity,setStatus,assignJob,undoLastChange,confirmCommand,context,writeResult,index}.ts
                   resources.ts [M4]  prompts.ts [M4]
-      app/        commandService.ts  readService.ts  ports.ts  spoken.ts  errors.ts
-      domain/     schemas.ts  types.ts  matcher.ts  normalize.ts  json.ts
-                  operations/{types,adjustQuantity,registry}.ts   rules/* [M2]
-      templates/  types.ts  warehouse.ts  index.ts   cafe.ts [M2]  repair.ts [M2]
+      app/        commandService.ts  commit.ts  readService.ts  ports.ts  outcomes.ts  spoken.ts  errors.ts  confirmationCode.ts
+      domain/     schemas.ts  types.ts  matcher.ts  normalize.ts  status.ts  board.ts  json.ts
+                  operations/{types,adjustQuantity,setStatus,assignJob,reverseEvent,registry}.ts   rules/{lowStock,index}.ts
+      templates/  types.ts  shared.ts  warehouse.ts  cafe.ts  repair.ts  index.ts
       infra/      db/{pool,migrator,admin,pgStore,seed}.ts  db/migrations/*   sheets/{adapter,worker} [M3]
       cli/        db.ts  dbBin.ts   (create | migrate | seed | reset | setup)
     tests/        unit/  integration/ (real PostgreSQL)  e2e/ (spawned stdio process)  helpers/
@@ -74,24 +75,24 @@ Demo fixtures live in `templates/*.ts` as typed data (validated by the same sche
 
 ## 3. MCP surface
 
-**Workspace scoping (decision, M1).** Tools do **not** accept a workspace from the model: each server instance serves exactly one workspace (`VOICEOPS_WORKSPACE`) as one actor (`VOICEOPS_ACTOR_ID`). Otherwise a model (or text injected into its context) could address workspaces the actor is not entitled to. From M2 an optional `workspaceId` returns, validated against an allow-list (`VOICEOPS_WORKSPACES`), so the café / warehouse / repair demo can switch workspaces.
+**Workspace scoping (as built in M2).** A server instance acts as one actor (`VOICEOPS_ACTOR_ID`) and may address only the workspaces on its allow-list `VOICEOPS_WORKSPACES` (default: just `VOICEOPS_WORKSPACE`). Every tool takes an optional `workspaceId`, defaulting to `VOICEOPS_WORKSPACE`; anything not on the allow-list is refused, so a model (or text injected into its context) cannot address a workspace the actor is not entitled to. M1 had no parameter at all.
 
-Tools are intent-level and few so Claude picks them reliably. `resource` accepts a spoken name or an ID. The server resolves it and never trusts IDs Claude makes up. Status in the table: ✅ built (M1), otherwise planned.
+Tools are intent-level and few so Claude picks them reliably. `resource` accepts a spoken name or an ID. The server resolves it and never trusts IDs Claude makes up. Status in the table: ✅ built (M1/M2), otherwise planned.
 
 | Tool | Kind | Maps to |
 | --- | --- | --- |
 | ✅ `check-health` | read | Server version, uptime, workspace, database status, connected MCP client |
-| `get-workspace` | read | Template, resource types, allowed statuses and technician names, so Claude uses real vocabulary |
+| ✅ `get-workspace` | read | Template, resource types, allowed statuses and technician names, so Claude uses real vocabulary |
 | ✅ `find-resources {query?, type?, limit}` | read | Match step, returns ranked candidates; no query lists everything |
 | ✅ `get-resource {resource}` | read | `GET_RESOURCE` ("how many air filters?") |
-| `get-board` | read | §8 board JSON, including `version` |
+| ✅ `get-board` | read | §8 board JSON, including `version` |
 | ✅ `list-events {limit, resource?}` | read | Activity log with per-event sync status |
-| `list-alerts` | read | Low-stock alerts |
-| ✅ `adjust-quantity {resource, delta, idempotencyKey?}` | write | `ADJUST_QUANTITY` (M1: changes that need confirmation are refused with `CONFIRMATION_UNSUPPORTED`) |
-| `set-status {resource, status}` | write | `SET_STATUS` |
-| `assign-job {job, assignee}` | write | `ASSIGN_JOB` |
-| `undo-last-change {}` | write | `REVERSE_EVENT` |
-| `confirm-command {token}` / `cancel-command {token}` | write | Second phase of confirmation |
+| ✅ `list-alerts {status?, limit}` | read | Low-stock alerts |
+| ✅ `adjust-quantity {resource, delta, idempotencyKey?}` | write | `ADJUST_QUANTITY` (large or zeroing changes need confirmation) |
+| ✅ `set-status {resource, status, idempotencyKey?}` | write | `SET_STATUS` |
+| ✅ `assign-job {job, assignee, idempotencyKey?}` | write | `ASSIGN_JOB` |
+| ✅ `undo-last-change {idempotencyKey?}` | write | `REVERSE_EVENT` |
+| ✅ `confirm-command {token}` / `cancel-command {token}` | write | Second phase of confirmation |
 | `reset-workspace`, `retry-sync` | demo | Registered only if `VOICEOPS_DEMO_TOOLS=1` |
 
 **One result envelope for all writes:**
@@ -126,11 +127,19 @@ Tools are intent-level and few so Claude picks them reliably. `resource` accepts
 | `adjust-quantity` going below zero | Rejected |
 | `set-status`, `assign-job`, `undo-last-change` | Always confirm |
 
+**As built (M2).**
+- A change that needs a yes is *planned* against the resource's fresh state (so an invalid one is refused at once, with no token), then parked in `commands` and answered with `confirmation_required`: `confirmation.token`, the `readback` question, a `reason` and `expiresAt` (2 minutes). Nothing has changed yet.
+- The token is 128 random bits shown only to the caller; only its SHA-256 hash is stored, and it is never logged. It works once, only for the actor who asked, only in the workspace it was issued for, and only until it expires.
+- `confirm-command` locks the pending row, then re-checks everything under the resource lock: not cancelled, not expired, the resource still at the version it had when asked (otherwise `conflict`, nothing applied), the operation still valid. Two confirmations at once apply once; a repeat returns the original result (`replayed: true`).
+- `cancel-command` discards it (idempotent); cancelling something already applied points to `undo-last-change`.
+- `undo-last-change` finds the actor's newest event that is neither an undo nor already undone, and applies a compensating event (`reversal_of`) only if the resource still holds exactly what that event left, so a later change is never overwritten. A unique index allows an event to be undone once. Undoing an undo is not supported; asking again undoes the change before.
+- Not built (possible later): MCP *elicitation* as a second prompt route, and expiry cleanup of old pending rows.
+
 Mark `confirm-command` with `destructiveHint` so the client's own permission prompt acts as a second human gate. If the Claude clients in use support MCP **elicitation**, the server can prompt the user directly instead (verify client support first). The token flow remains the baseline.
 
 ## 5. Data model and commit transaction
 
-**Tables:** `workspaces` (with `board_version` and an `integrations` jsonb, e.g. `{"sheets": {"spreadsheetId": "…"}}`; no key means the destination is not configured), `resources` (jsonb `attributes`, `aliases`, `version`), `events` (columns `request_args`, `before_state`, `after_state`, `summary`, `client_name`), `sync_jobs`, and, still to come, `commands` [M2], `alerts` [M2], `sheet_rows` [M3], `devices` (stub). Built in M1: `workspaces`, `resources`, `events`, `sync_jobs` (migration `0001_init`). Migrations are TypeScript modules in `infra/db/migrations/` applied by `npm run db:migrate`; the server refuses to start if the schema is behind.
+**Tables:** `workspaces` (with `board_version` and an `integrations` jsonb, e.g. `{"sheets": {"spreadsheetId": "…"}}`; no key means the destination is not configured), `resources` (jsonb `attributes`, `aliases`, `version`), `events` (columns `request_args`, `before_state`, `after_state`, `summary`, `client_name`), `sync_jobs`, `commands` (pending changes awaiting a yes, token hash only), `alerts` (partial unique index: one open alert per resource and rule), and, still to come, `sheet_rows` [M3], `devices` (stub). Built: `workspaces`, `resources`, `events`, `sync_jobs` (migration `0001_init`) and `commands`, `alerts`, a unique index on `events.reversal_of` (migration `0002_confirmations_alerts`). Migrations are TypeScript modules in `infra/db/migrations/` applied by `npm run db:migrate`; the server refuses to start if the schema is behind.
 
 **Constraints that carry the guarantees:**
 - `events.command_id` is unique.
@@ -138,15 +147,15 @@ Mark `confirm-command` with `destructiveHint` so the client's own permission pro
 - Every query is scoped by `workspace_id`.
 
 **Commit (one transaction):**
-1. Lock the `commands` row. If it is already committed, return the stored result.
-2. `SELECT … FOR UPDATE` on the resource, then check `version == expectedVersion`.
-3. Run the pure `validate` and `apply`.
+1. When confirming, lock the pending `commands` row first (two confirmations cannot both proceed). If it was already applied, return the original result.
+2. `SELECT … FOR UPDATE` on the resource. If an event with this command id already exists, replay it (or report a conflict if it was a different request). When confirming, check `version == expectedVersion`.
+3. Plan the change with the pure operation (`plan` returns `rejected`, or `ready` with the new attributes, before/after, a summary and an optional confirmation). If it needs a yes and this is a new request, park it in `commands` and stop here.
 4. Insert the event with before and after, actor, `source='mcp'` and the MCP client name.
 5. Update the resource and bump its version.
 6. Evaluate rules: open the low-stock alert on crossing, resolve it on restock.
 7. Insert a `sync_jobs` outbox row.
 8. Bump `workspaces.board_version` (the Fire TV compares this later).
-9. Mark the command committed.
+9. When confirming, mark the pending command confirmed and link its event.
 
 Undo writes a compensating event with `reversal_of`. It is allowed only when the resource's current state still equals the original event's `after`; otherwise it is rejected with an explanation.
 

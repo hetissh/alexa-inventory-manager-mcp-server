@@ -8,6 +8,7 @@ describe('loadConfig', () => {
       logLevel: 'info',
       databaseUrl: 'postgresql://localhost:5432/voiceops',
       workspaceId: 'northside-warehouse',
+      workspaceIds: ['northside-warehouse'],
       actorId: 'manager-1',
     });
   });
@@ -24,8 +25,27 @@ describe('loadConfig', () => {
       logLevel: 'debug',
       databaseUrl: 'postgres://user:pw@db.internal:5433/ops',
       workspaceId: 'cafe-demo',
+      workspaceIds: ['cafe-demo'],
       actorId: 'staff@example.com',
     });
+  });
+
+  it('reads an allow-list of workspaces, trimming and de-duplicating it', () => {
+    const config = loadConfig({
+      VOICEOPS_WORKSPACE: 'harbor-cafe',
+      VOICEOPS_WORKSPACES: ' northside-warehouse, harbor-cafe ,eastside-repairs,harbor-cafe,',
+    });
+    expect(config.workspaceId).toBe('harbor-cafe');
+    expect(config.workspaceIds).toEqual(['northside-warehouse', 'harbor-cafe', 'eastside-repairs']);
+  });
+
+  it.each([
+    ['a default that is not in the allow-list', { VOICEOPS_WORKSPACES: 'harbor-cafe,eastside-repairs' }, /must be one of the workspaces[\s\S]*VOICEOPS_WORKSPACE/],
+    ['an invalid id in the list', { VOICEOPS_WORKSPACES: 'northside-warehouse,Not A Slug' }, /VOICEOPS_WORKSPACES/],
+    ['an empty list', { VOICEOPS_WORKSPACES: ' , ' }, /VOICEOPS_WORKSPACES/],
+    ['too many workspaces', { VOICEOPS_WORKSPACES: Array.from({ length: 11 }, (_, i) => `ws-${String(i)}x`).join(',') }, /VOICEOPS_WORKSPACES/],
+  ])('rejects %s', (_label, env, message) => {
+    expect(() => loadConfig(env)).toThrow(message);
   });
 
   it.each([

@@ -1,9 +1,13 @@
 import type { TemplateId } from '../domain/types.js';
+import { cafeTemplate } from './cafe.js';
+import { repairTemplate } from './repair.js';
 import type { Template } from './types.js';
 import { warehouseTemplate } from './warehouse.js';
 
 const TEMPLATES: Readonly<Record<TemplateId, Template>> = {
   warehouse: warehouseTemplate,
+  cafe: cafeTemplate,
+  repair: repairTemplate,
 };
 
 export function getTemplate(id: TemplateId): Template {

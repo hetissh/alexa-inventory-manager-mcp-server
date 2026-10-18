@@ -32,6 +32,8 @@ describe('migrator', () => {
         `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name`,
       );
       expect(tables.rows.map((row) => row.table_name)).toEqual([
+        'alerts',
+        'commands',
         'events',
         'resources',
         'schema_migrations',
@@ -50,7 +52,7 @@ describe('migrator', () => {
 
   it('fails fast with the fix in the message when the schema is behind', async () => {
     await withFreshDatabase(async (pool) => {
-      await expect(assertSchemaUpToDate(pool)).rejects.toThrow(/out of date \(pending: 0001_init\).*db:setup/);
+      await expect(assertSchemaUpToDate(pool)).rejects.toThrow(/out of date \(pending: 0001_init, 0002_confirmations_alerts\).*db:setup/);
       await migrate(pool);
       await expect(assertSchemaUpToDate(pool)).resolves.toBeUndefined();
     });

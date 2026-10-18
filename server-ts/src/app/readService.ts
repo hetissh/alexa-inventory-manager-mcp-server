@@ -1,3 +1,4 @@
+import { type BoardMetric, computeMetrics } from '../domain/board.js';
 import {
   type Candidate,
   type MatchKind,
@@ -5,8 +6,19 @@ import {
   resolveResource,
 } from '../domain/matcher.js';
 import type { Resource, ResourceType } from '../domain/schemas.js';
+import type { AlertRecord, AlertStatus, Workspace, WorkspaceSettings } from '../domain/types.js';
+import { getTemplate } from '../templates/index.js';
+import { WorkspaceNotFoundError } from './errors.js';
 import type { AppLogger, ListedEvent, Store } from './ports.js';
-import { spokenAmbiguous, spokenEvents, spokenNotFound, spokenResource } from './spoken.js';
+import {
+  spokenAlertList,
+  spokenAmbiguous,
+  spokenBoard,
+  spokenEvents,
+  spokenNotFound,
+  spokenResource,
+  spokenWorkspace,
+} from './spoken.js';
 
 export interface FindResourcesInput {
   /** Free text to match against names and aliases. Empty or missing lists everything. */
@@ -54,18 +66,53 @@ export type ListEventsOutcome =
     }
   | { readonly status: 'not_found'; readonly query: string; readonly spoken: string };
 
+export interface ListAlertsInput {
+  readonly status: AlertStatus | 'all';
+  readonly limit: number;
+}
+
+export interface Board {
+  readonly workspaceId: string;
+  readonly title: string;
+  /** Changes whenever the board's content may have changed; a screen refreshes when it differs from the one it has. */
+  readonly version: number;
+  readonly generatedAt: Date;
+  readonly metrics: readonly BoardMetric[];
+  readonly resources: readonly { readonly resource: Resource; readonly hasAlert: boolean }[];
+  readonly alerts: readonly AlertRecord[];
+  readonly recentActivity: readonly ListedEvent[];
+  readonly spoken: string;
+}
+
+export interface WorkspaceInfo {
+  readonly workspace: Workspace;
+  readonly templateLabel: string;
+  readonly settings: WorkspaceSettings;
+  readonly counts: Readonly<Partial<Record<ResourceType, number>>>;
+  readonly spoken: string;
+}
+
 export interface ReadService {
   health(): Promise<{ readonly database: 'ok' | 'unavailable' }>;
   findResources(workspaceId: string, input: FindResourcesInput): Promise<FindResourcesResult>;
   getResource(workspaceId: string, query: string): Promise<GetResourceOutcome>;
   listEvents(workspaceId: string, input: ListEventsInput): Promise<ListEventsOutcome>;
+  listAlerts(workspaceId: string, input: ListAlertsInput): Promise<{ readonly alerts: readonly AlertRecord[]; readonly spoken: string }>;
+  getBoard(workspaceId: string): Promise<Board>;
+  getWorkspaceInfo(workspaceId: string): Promise<WorkspaceInfo>;
 }
+
+const BOARD_ACTIVITY_LIMIT = 10;
 
 function byTypeThenName(a: Resource, b: Resource): number {
   return a.type.localeCompare(b.type) || a.name.localeCompare(b.name);
 }
 
-export function createReadService(store: Store, logger: AppLogger): ReadService {
+export function createReadService(
+  store: Store,
+  logger: AppLogger,
+  now: () => Date = () => new Date(),
+): ReadService {
   return {
     async health() {
       try {
@@ -127,6 +174,52 @@ export function createReadService(store: Store, logger: AppLogger): ReadService 
       }
       const events = await store.listEvents(workspaceId, { limit: input.limit, resourceId });
       return { status: 'ok', events, spoken: spokenEvents(events.length) };
+    },
+
+    async listAlerts(workspaceId, input) {
+      const alerts = await store.listAlerts(workspaceId, input);
+      return { alerts, spoken: spokenAlertList(alerts.length, input.status) };
+    },
+
+    async getBoard(workspaceId) {
+      const snapshot = await store.getBoardSnapshot(workspaceId, BOARD_ACTIVITY_LIMIT);
+      if (!snapshot) {
+        throw new WorkspaceNotFoundError(workspaceId);
+      }
+      const { board } = getTemplate(snapshot.workspace.template);
+      const alerted = new Set(snapshot.openAlerts.map((alert) => alert.resourceId));
+      const metrics = computeMetrics(board.metrics, snapshot.resources, snapshot.openAlerts);
+      return {
+        workspaceId,
+        title: board.title,
+        version: snapshot.workspace.boardVersion,
+        generatedAt: now(),
+        metrics,
+        resources: snapshot.resources.map((resource) => ({ resource, hasAlert: alerted.has(resource.id) })),
+        alerts: snapshot.openAlerts,
+        recentActivity: snapshot.recentEvents,
+        spoken: spokenBoard(board.title, metrics),
+      };
+    },
+
+    async getWorkspaceInfo(workspaceId) {
+      const workspace = await store.getWorkspace(workspaceId);
+      if (!workspace) {
+        throw new WorkspaceNotFoundError(workspaceId);
+      }
+      const template = getTemplate(workspace.template);
+      const counts: Partial<Record<ResourceType, number>> = {};
+      const resources = await store.listResources(workspaceId);
+      for (const resource of resources) {
+        counts[resource.type] = (counts[resource.type] ?? 0) + 1;
+      }
+      return {
+        workspace,
+        templateLabel: template.label,
+        settings: template.settings,
+        counts,
+        spoken: spokenWorkspace(workspace.name, template.label, resources.length),
+      };
     },
   };
 }

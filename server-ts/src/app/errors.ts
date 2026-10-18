@@ -9,6 +9,14 @@ export class DuplicateCommandError extends Error {
   }
 }
 
+/** The event being undone has already been undone. */
+export class AlreadyReversedError extends Error {
+  constructor(readonly eventId: string | null) {
+    super(`Event "${String(eventId)}" has already been undone.`);
+    this.name = 'AlreadyReversedError';
+  }
+}
+
 /** The resource changed between being read and being written. */
 export class VersionConflictError extends Error {
   constructor(

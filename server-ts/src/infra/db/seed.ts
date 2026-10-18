@@ -12,8 +12,8 @@ export interface SeedResult {
 
 /**
  * Creates the template's workspace and resources. Without `reset` it only adds what is missing and never
- * overwrites live state. With `reset` it first deletes the workspace's events, sync jobs and resources
- * (keeping its integrations) and restores the fixture.
+ * overwrites live state. With `reset` it first deletes the workspace's events, pending changes, alerts,
+ * sync jobs and resources (keeping its integrations) and restores the fixture.
  */
 export async function seedWorkspace(
   pool: Pool,
@@ -26,9 +26,10 @@ export async function seedWorkspace(
   try {
     await client.query('BEGIN');
     if (options.reset) {
-      await client.query('DELETE FROM sync_jobs WHERE workspace_id = $1', [workspace.id]);
-      await client.query('DELETE FROM events WHERE workspace_id = $1', [workspace.id]);
-      await client.query('DELETE FROM resources WHERE workspace_id = $1', [workspace.id]);
+      // Children first: these all reference events and/or resources.
+      for (const table of ['sync_jobs', 'alerts', 'commands', 'events', 'resources']) {
+        await client.query(`DELETE FROM ${table} WHERE workspace_id = $1`, [workspace.id]);
+      }
     }
     await client.query(
       `INSERT INTO workspaces (id, name, template, timezone) VALUES ($1, $2, $3, $4)
