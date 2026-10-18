@@ -4,6 +4,10 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    // Integration tests share one PostgreSQL test database and reset it between tests,
+    // so test files must not run in parallel.
+    fileParallelism: false,
+    globalSetup: ['tests/global-setup.ts'],
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],

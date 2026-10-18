@@ -3,48 +3,86 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { pino } from 'pino';
 
-import { createMcpServer, type McpServerDeps } from '../../src/mcp/server.js';
+import { createServices, type Services } from '../../src/composition.js';
+import { createMcpServer } from '../../src/mcp/server.js';
 import type { ToolContext } from '../../src/mcp/tools/context.js';
 import { registerTools } from '../../src/mcp/tools/index.js';
+import { createTestPool, resetWarehouse, TEST_DATABASE_URL, WORKSPACE_ID } from './db.js';
 
 export const silentLogger = pino({ level: 'silent' });
 
 export const TEST_CLIENT_INFO = { name: 'test-client', version: '9.9.9' } as const;
+export const TEST_ACTOR = 'test-actor';
 
 export interface ConnectedPair {
   readonly client: Client;
   readonly server: McpServer;
+  readonly services: Services;
   close(): Promise<void>;
 }
 
-async function link(server: McpServer): Promise<ConnectedPair> {
+/** Restores the warehouse fixture and opens real services against the test database. */
+async function openServices(): Promise<Services> {
+  const pool = createTestPool();
+  try {
+    await resetWarehouse(pool);
+  } finally {
+    await pool.end();
+  }
+  return createServices(
+    { logLevel: 'silent', databaseUrl: TEST_DATABASE_URL, workspaceId: WORKSPACE_ID, actorId: TEST_ACTOR },
+    silentLogger,
+  );
+}
+
+async function link(server: McpServer, services: Services): Promise<ConnectedPair> {
   const client = new Client(TEST_CLIENT_INFO);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   return {
     client,
     server,
+    services,
     close: async () => {
       await client.close();
       await server.close();
+      await services.close();
     },
   };
 }
 
-/** Connects a real client to the real server (via createMcpServer) over an in-memory transport. */
-export async function connectInMemory(overrides: Partial<McpServerDeps> = {}): Promise<ConnectedPair> {
+/** A real client talking to the real server (createMcpServer) backed by the real test database. */
+export async function connectInMemory(): Promise<ConnectedPair> {
+  const services = await openServices();
   const server = createMcpServer({
     logger: silentLogger,
     uptimeSeconds: () => 42.9,
     nodeVersion: 'v24.0.0-test',
-    ...overrides,
+    workspaceId: WORKSPACE_ID,
+    actorId: TEST_ACTOR,
+    commands: services.commands,
+    reads: services.reads,
   });
-  return link(server);
+  return link(server, services);
 }
 
-/** Registers the tools on a bare McpServer with a custom ToolContext (to simulate odd contexts). */
-export async function connectWithContext(context: ToolContext): Promise<ConnectedPair> {
+/** Registers the tools on a bare server so a test can override parts of the ToolContext. */
+export async function connectWithContext(
+  overrides: Partial<ToolContext> | ((services: Services) => Partial<ToolContext>) = {},
+): Promise<ConnectedPair> {
+  const services = await openServices();
+  const extra = typeof overrides === 'function' ? overrides(services) : overrides;
   const server = new McpServer({ name: 'test-server', version: '0.0.0' });
-  registerTools(server, context);
-  return link(server);
+  registerTools(server, {
+    logger: silentLogger,
+    uptimeSeconds: () => 1,
+    nodeVersion: 'v24.0.0-test',
+    getClientInfo: () => TEST_CLIENT_INFO,
+    workspaceId: WORKSPACE_ID,
+    actorId: TEST_ACTOR,
+    commands: services.commands,
+    reads: services.reads,
+    ...extra,
+  });
+  return link(server, services);
 }

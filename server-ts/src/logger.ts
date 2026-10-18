@@ -5,7 +5,15 @@ import { SERVER_NAME } from './version.js';
 
 export type { Logger };
 
-const REDACTED_KEYS = ['password', 'token', 'apiKey', 'authorization', 'secret'];
+const REDACTED_KEYS = [
+  'password',
+  'token',
+  'apiKey',
+  'authorization',
+  'secret',
+  'databaseUrl',
+  'connectionString',
+];
 
 /** Synchronous stderr destination: stdout is reserved for MCP JSON-RPC traffic. */
 export function createStderrDestination(): DestinationStream {

@@ -8,6 +8,10 @@
     "install:all": "npm --prefix server-ts install",
     "build": "npm --prefix server-ts run build",
     "test": "npm --prefix server-ts run test",
+    "db:setup": "npm --prefix server-ts run db:setup",
+    "db:migrate": "npm --prefix server-ts run db:migrate",
+    "db:seed": "npm --prefix server-ts run db:seed",
+    "db:reset": "npm --prefix server-ts run db:reset",
     "local:gate": "npm --prefix server-ts run local:gate"
   }
 }

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { errorMessage } from './errorMessage.js';
 import { createStderrDestination } from './logger.js';
 import { main } from './main.js';
 import { installStdoutGuard } from './stdout-guard.js';
@@ -12,7 +13,6 @@ main({
   logDestination: createStderrDestination(),
   proc: process,
 }).catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`voiceops-mcp failed to start: ${message}\n`);
+  process.stderr.write(`voiceops-mcp failed to start: ${errorMessage(error)}\n`);
   process.exit(1);
 });

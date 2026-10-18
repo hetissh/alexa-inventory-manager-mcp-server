@@ -48,41 +48,46 @@ Claude Desktop / Code                later: Alexa Lambda · Dashboard · Fire TV
 
 **Operation registry.** Each operation is one file with five parts: an args schema, `validate(resource, args, config)`, `needsConfirmation(...)`, `apply(...)` and `readback(...)`. Adding an operation means adding a file. The café, warehouse and repair-shop templates are data only (types, allowed statuses, thresholds, board layout).
 
-**Layout** (target; folders are created when the milestone that needs them starts):
+**Layout** (as built through M1; `[M2]`/`[M3]` marks what is still to come). Import direction is enforced by ESLint (`domain ← templates ← app ← {infra, mcp}`); only `main.ts`, `composition.ts` and `cli/` wire layers together.
 
 ```text
 /
   AGENTS.md  CHANGELOG.md  README.md  package.json (delegates to server-ts)
   docs/mcp-server-plan.md
   server-ts/
-    package.json  tsconfig*.json  eslint.config.js  vitest.config.ts  .env.example
+    package.json  tsconfig*.json  eslint.config.js  vitest.config.ts
     src/
-      bin.ts  main.ts  config.ts  logger.ts  lifecycle.ts  stdout-guard.ts  version.ts
-      mcp/        server.ts  tools/*.ts  resources.ts  prompts.ts      (adapter)
-      app/        commandService.ts  readService.ts  spoken.ts  errors.ts   (M1+)
-      domain/     operations/*  registry.ts  matcher.ts  normalize.ts  rules/*  schemas.ts   (M1+)
-      templates/  cafe.ts  warehouse.ts  repair.ts   (M1/M2)
-      infra/      db/{migrations,repos}  sheets/{adapter,worker}   (M1/M3)
-    tests/e2e/    spawned-process stdio tests
-  fixtures/       demo workspaces (M1+)
+      bin.ts  main.ts  composition.ts  config.ts  logger.ts  lifecycle.ts  stdout-guard.ts  errorMessage.ts  version.ts
+      mcp/        server.ts  views.ts  tools/{checkHealth,findResources,getResource,adjustQuantity,listEvents,context,index}.ts
+                  resources.ts [M4]  prompts.ts [M4]
+      app/        commandService.ts  readService.ts  ports.ts  spoken.ts  errors.ts
+      domain/     schemas.ts  types.ts  matcher.ts  normalize.ts  json.ts
+                  operations/{types,adjustQuantity,registry}.ts   rules/* [M2]
+      templates/  types.ts  warehouse.ts  index.ts   cafe.ts [M2]  repair.ts [M2]
+      infra/      db/{pool,migrator,admin,pgStore,seed}.ts  db/migrations/*   sheets/{adapter,worker} [M3]
+      cli/        db.ts  dbBin.ts   (create | migrate | seed | reset | setup)
+    tests/        unit/  integration/ (real PostgreSQL)  e2e/ (spawned stdio process)  helpers/
   service-py/     reserved — not created yet
 ```
 
+Demo fixtures live in `templates/*.ts` as typed data (validated by the same schemas as live data) rather than a separate `fixtures/` folder.
+
 ## 3. MCP surface
 
-Every tool takes an optional `workspaceId`, defaulting to the configured one. Tools are intent-level and few so Claude picks them reliably. `resource` accepts a spoken name or an ID. The server resolves it and never trusts IDs Claude makes up.
+**Workspace scoping (decision, M1).** Tools do **not** accept a workspace from the model: each server instance serves exactly one workspace (`VOICEOPS_WORKSPACE`) as one actor (`VOICEOPS_ACTOR_ID`). Otherwise a model (or text injected into its context) could address workspaces the actor is not entitled to. From M2 an optional `workspaceId` returns, validated against an allow-list (`VOICEOPS_WORKSPACES`), so the café / warehouse / repair demo can switch workspaces.
+
+Tools are intent-level and few so Claude picks them reliably. `resource` accepts a spoken name or an ID. The server resolves it and never trusts IDs Claude makes up. Status in the table: ✅ built (M1), otherwise planned.
 
 | Tool | Kind | Maps to |
 | --- | --- | --- |
-| `check-health` | read | M0 diagnostics: server version, uptime, connected MCP client |
-| `echo-message` | read | M0 diagnostics: proves argument validation round-trips (removed or kept as a diagnostic later) |
+| ✅ `check-health` | read | Server version, uptime, workspace, database status, connected MCP client |
 | `get-workspace` | read | Template, resource types, allowed statuses and technician names, so Claude uses real vocabulary |
-| `find-resources {query, type?}` | read | Match step, returns ranked candidates |
-| `get-resource {resource}` | read | `GET_RESOURCE` ("how many air filters?") |
+| ✅ `find-resources {query?, type?, limit}` | read | Match step, returns ranked candidates; no query lists everything |
+| ✅ `get-resource {resource}` | read | `GET_RESOURCE` ("how many air filters?") |
 | `get-board` | read | §8 board JSON, including `version` |
-| `list-events {limit, resource?}` | read | Activity log with per-event sync status |
+| ✅ `list-events {limit, resource?}` | read | Activity log with per-event sync status |
 | `list-alerts` | read | Low-stock alerts |
-| `adjust-quantity {resource, delta}` | write | `ADJUST_QUANTITY` |
+| ✅ `adjust-quantity {resource, delta, idempotencyKey?}` | write | `ADJUST_QUANTITY` (M1: changes that need confirmation are refused with `CONFIRMATION_UNSUPPORTED`) |
 | `set-status {resource, status}` | write | `SET_STATUS` |
 | `assign-job {job, assignee}` | write | `ASSIGN_JOB` |
 | `undo-last-change {}` | write | `REVERSE_EVENT` |
@@ -125,7 +130,7 @@ Mark `confirm-command` with `destructiveHint` so the client's own permission pro
 
 ## 5. Data model and commit transaction
 
-**Tables:** `workspaces` (with `board_version`), `resources` (jsonb `attributes`, `aliases`, `version`), `events`, `commands`, `alerts`, `sync_jobs`, `sheet_rows` (resource ID → row number), `devices` (stub).
+**Tables:** `workspaces` (with `board_version` and an `integrations` jsonb, e.g. `{"sheets": {"spreadsheetId": "…"}}`; no key means the destination is not configured), `resources` (jsonb `attributes`, `aliases`, `version`), `events` (columns `request_args`, `before_state`, `after_state`, `summary`, `client_name`), `sync_jobs`, and, still to come, `commands` [M2], `alerts` [M2], `sheet_rows` [M3], `devices` (stub). Built in M1: `workspaces`, `resources`, `events`, `sync_jobs` (migration `0001_init`). Migrations are TypeScript modules in `infra/db/migrations/` applied by `npm run db:migrate`; the server refuses to start if the schema is behind.
 
 **Constraints that carry the guarantees:**
 - `events.command_id` is unique.
@@ -152,6 +157,11 @@ Tiers: (1) exact ID, (2) exact normalized name or alias, (3) token-set match, (4
 Normalization lowercases, strips punctuation, converts number words to digits ("compressor two", "job one oh eight") and singularizes plurals.
 
 The matcher only auto-resolves when there is exactly one candidate above the threshold with a clear margin over the runner-up. Otherwise it returns `ambiguous` or `not_found` with candidates and changes nothing. `assign-job` uses the same matcher for the technician (for example, two Rahuls).
+
+As built in M1 (thresholds in `domain/matcher.ts`):
+- Exact id / name / alias matches resolve; a partial name resolves only if it is unique ("brake" → Brake Pads) and is `ambiguous` otherwise ("filter" → Air Filter, Oil Filter).
+- **Typo-level (fuzzy) matches never auto-resolve for writes**: they come back as `ambiguous` ("Did you mean Air Filter?"). Reads may auto-resolve a unique match with Dice similarity ≥ 0.8 and a 0.15 margin, and report `matchedBy: "fuzzy"`.
+- **Numbers identify things:** a fuzzy match is only considered between names whose numbers agree, so "compressor three" is `not_found`, never Compressor 2.
 
 ## 7. Sheets worker
 
