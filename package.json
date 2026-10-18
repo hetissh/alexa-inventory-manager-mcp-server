@@ -1,0 +1,13 @@
+{
+  "name": "voiceops-workspace",
+  "version": "0.1.0",
+  "description": "Repo-root convenience scripts. The code lives in server-ts/ (see AGENTS.md).",
+  "private": true,
+  "license": "UNLICENSED",
+  "scripts": {
+    "install:all": "npm --prefix server-ts install",
+    "build": "npm --prefix server-ts run build",
+    "test": "npm --prefix server-ts run test",
+    "local:gate": "npm --prefix server-ts run local:gate"
+  }
+}
