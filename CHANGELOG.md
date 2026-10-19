@@ -5,17 +5,17 @@
 
 ## Current state
 
-_Last updated: 2026-10-19 (M4 first slice: live-board web server built and committed locally; M3 still waiting for Google credentials to verify it live)._
+_Last updated: 2026-10-20 (M3 verified live against real Google Sheets; M4 first slice committed locally)._
 
 | Item | Status |
 | --- | --- |
 | Product | VoiceOps: voice-controlled operations (inventory, equipment, menu items, repair jobs) with an audited event ledger. This repo is the **MCP server** that lets Claude act as the "voice" while Alexa/Fire TV/dashboard come later. Product spec: `voiceops-hackathon-build-plan.md` (outside the repo; summarised in `docs/mcp-server-plan.md`). |
-| Milestone | **M2 complete.** **M3 (Google Sheets) is built and tested against a fake spreadsheet, but NOT yet run against real Google**: it needs the user's Google Cloud project, service account and Sheet (see "Next actions"). It is not marked done until that live check passes. **M4 (hardening) is started:** the read-only live-board web server, its page and the demo script are built and tested; the Streamable HTTP MCP transport with auth is **not started** (waiting on a decision from the user, see "Next actions"). |
+| Milestone | **M2 complete.** **M3 (Google Sheets) is done:** verified live on 2026-10-20 against the user's real Google Sheet (see the 2026-10-20 log entry for exactly what was and was not covered; it was driven by an MCP client script, not yet by a Claude session). **M4 (hardening) is started:** the read-only live-board web server, its page and the demo script are built and tested; the Streamable HTTP MCP transport with auth is **not started** (waiting on a decision from the user, see "Next actions"). |
 | Git | `main` holds the M0 scaffold commit. Branch `feat/m1-core-loop` (cut from `main`; the name predates M2) holds the M1, M2 and M3 commits plus a docs commit and **is pushed to `origin/feat/m1-core-loop` up to the M3 commit** (2026-10-19); the docs commit `b21b0a3` after it is committed locally but **not pushed**. **The M4 board-server work is committed locally on top of it and not pushed** (push only when the user asks). `main` is **not** pushed and nothing is merged into it; `origin/main` does not exist. |
 | Gate | `npm run local:gate` is green (2026-10-19, with the board server): typecheck, lint, 674 tests in 51 files, 99.85 % statements / 99.39 % branches / 100 % functions with every file at or above the 90 % per-file threshold, build. Needs PostgreSQL running. |
 | Registered with Claude? | **Not by us.** The user plugs the server into Claude themselves (see "Connect it to Claude" in `README.md`). An earlier registration must be updated: add `VOICEOPS_WORKSPACES=northside-warehouse,harbor-cafe,eastside-repairs` to use the cafe and repair demos, restart the client after rebuilding, and run `npm run db:setup` once (the server refuses to start with the schema behind). M3 adds no migration. |
-| What works | **Live board:** `npm run board` serves each allowed workspace's board as a page (`/board/<id>`) and JSON (`/workspaces/<id>/board`, ETag = board version) on `127.0.0.1:8787`, read-only, polling, with a stale banner when the server goes away (details: README "Live board", plan §8a). 14 tools (15 with demo tools): the 13 from M2 plus `retry-sync` (and the demo-only `reset-workspace`). Three fictional workspaces on one engine. Server-enforced confirmation tokens, undo, low-stock alerts, a versioned board snapshot, an allow-list of workspaces. **Spreadsheet sync:** `npm run sheets -- connect|check|disconnect` and a separate worker process (`npm run worker`) that rewrites the Resources tab and appends the Activity tab, in batches, with locking, backoff, retries and visible failures. Exercised against an in-memory spreadsheet and the real Google client library's "no credentials" path only. |
-| What does not exist yet | Any proof against real Google (credentials needed), the Streamable HTTP **MCP** transport and its auth (only needed for claude.ai connectors; not started), a Fire TV-specific layout or a push channel (the board polls), MCP elicitation, cleanup of old pending changes, back-fill of pre-connection history into Activity, three rehearsals of the demo script by a person. |
+| What works | **Live board:** `npm run board` serves each allowed workspace's board as a page (`/board/<id>`) and JSON (`/workspaces/<id>/board`, ETag = board version) on `127.0.0.1:8787`, read-only, polling, with a stale banner when the server goes away (details: README "Live board", plan §8a). 14 tools (15 with demo tools): the 13 from M2 plus `retry-sync` (and the demo-only `reset-workspace`). Three fictional workspaces on one engine. Server-enforced confirmation tokens, undo, low-stock alerts, a versioned board snapshot, an allow-list of workspaces. **Spreadsheet sync:** `npm run sheets -- connect|check|disconnect` and a separate worker process (`npm run worker`) that rewrites the Resources tab and appends the Activity tab, in batches, with locking, backoff, retries and visible failures. Exercised against an in-memory spreadsheet **and live against a real Google Sheet** (warehouse workspace only; the cafe and repair workspaces are not connected to a sheet). |
+| What does not exist yet | Live proof of sheets for the cafe and repair workspaces (same code path; no sheets exist for them), real Sheets API quota figures, the Streamable HTTP **MCP** transport and its auth (only needed for claude.ai connectors; not started), a Fire TV-specific layout or a push channel (the board polls), MCP elicitation, cleanup of old pending changes, back-fill of pre-connection history into Activity, three rehearsals of the demo script by a person. |
 
 ### How to run and verify
 
@@ -32,11 +32,10 @@ VOICEOPS_WORKSPACES=northside-warehouse,harbor-cafe,eastside-repairs npm run boa
 
 ### Next actions — start here
 
-**1. Finish M3 (blocked on the user).** M3's exit condition (plan §10) can only be checked with real Google: a Claude command changes the database **and** the Sheet within about 10 s, and a forced Sheet failure leaves the internal change intact and shows `retrying` / `failed` in `list-events`.
-The user sets up Google following `docs/google-sheets-setup.md` and gives (none of it secret): the **sheet URL or id per workspace** (and which workspace each is for), the **service-account email**, and the **absolute path of the key file — never its contents** (it is a secret; it must stay outside the repo and out of any chat). The user creates `server-ts/.env` with `GOOGLE_APPLICATION_CREDENTIALS=<path>` by hand (an AI cannot write `.env*` files here). Then, either of them:
-   - `npm run sheets -- connect <workspace> <url>`, `npm --prefix server-ts run build`, `npm run worker`;
-   - check (a) a change via Claude shows in Resources and Activity within ~10 s (record the measured time); (b) unshare the sheet or point it at a wrong id: the update goes `failed` with a readable `syncError` in `list-events`, the change itself and the board are unaffected, and after fixing it `retry-sync` turns it `synced`; (c) with the worker stopped, `get-workspace` shows the backlog, and starting the worker clears it; (d) look up the real Sheets API quotas in the Cloud console and note them here (the docs site was blocked from the build environment);
-   - record the results in the log below and mark M3 done. If key creation is blocked by org policy, `gcloud auth application-default login` works with no code change.
+**1. M3 follow-ups (small; the live check itself is done, see the 2026-10-20 entry).**
+   - The user should move the service-account key out of `~/Downloads` (for example to `~/.config/voiceops/`, `chmod 600`), then create `server-ts/.env` by hand with `GOOGLE_APPLICATION_CREDENTIALS=<new absolute path>` so `npm run worker` and `npm run sheets` work without passing it on the command line. An AI cannot write `.env*` here and must never read the key. The assistant ran the live check by passing the key's path in the environment of each command only (no `.env` exists yet).
+   - Look up the real Sheets API quotas in the Cloud console and note them (the docs site was blocked here).
+   - Optional: a real Claude session drives a change that reaches the sheet; connect the other two workspaces to their own sheets; try the "unshare the sheet" failure (a 403 path; the live failure test used a nonexistent sheet id, a 404 path).
 
 **2. Rest of M4 (hardening).** Built: the live-board web server, its page and `docs/demo-script.md` (see the 2026-10-19 M4 log entry). Still open:
    - **Streamable HTTP MCP transport with auth** (bearer/OAuth, `Origin` validation, bind to localhost, token → actor and workspace). It is only needed if the user wants **claude.ai connectors** (which need public HTTPS and OAuth) or a dashboard that calls tools; Claude Desktop and Claude Code work over stdio today. **Ask the user whether they want it before building it.**
@@ -135,10 +134,35 @@ Decisions made during M4 (not asked of the user; revisit if they disagree):
 | M0 Scaffold | TS project, lint, vitest, gates, hello tools over stdio, Claude registration docs | **Done** 2026-10-18 |
 | M1 Core loop | Postgres, `adjust-quantity` end to end, warehouse fixture, read tools | **Done** 2026-10-19 |
 | M2 Full operations | `set-status`, `assign-job`, confirmation tokens, disambiguation, café/repair templates, alerts, board, undo, workspace allow-list | **Done** 2026-10-19 |
-| M3 Sheets | Outbox worker, retries, sync status, `retry-sync` | **Built 2026-10-19; live verification against real Google pending** (needs the user's credentials) |
+| M3 Sheets | Outbox worker, retries, sync status, `retry-sync` | **Done 2026-10-20** (built 2026-10-19; verified live against a real Google Sheet on 2026-10-20) |
 | M4 Hardening | Streamable HTTP + auth, board endpoint, rehearsal (demo reset tool already exists) | **Started 2026-10-19:** board server and page built and tested, demo script written; Streamable HTTP + auth not started (needs the user's decision); three rehearsals pending |
 
 ## Log (newest first)
+
+### 2026-10-20 — M3 verified live against real Google Sheets
+
+**What was done**
+- The user set up Google as in `docs/google-sheets-setup.md` (project, Sheets API, service account, JSON key kept in `~/Downloads`, one blank Sheet shared with the service account as Editor) and gave the sheet URL, the service account's email and the key file's absolute path. The key's contents were never read or shown; only Google's client library reads it. No `.env` exists yet: the path was passed as `GOOGLE_APPLICATION_CREDENTIALS` in the environment of each command.
+- `npm run sheets -- connect northside-warehouse <url>` succeeded (created the tabs, wrote the current state); `sheets check` said reachable and writable. The worker ran as `npm run worker`. Changes were made by a throwaway MCP client script that spawns the built `dist/bin.js` against the dev database (it lives in `/tmp`, not in the repo). The sheet was read back through the Sheets API (read-only scope) to see what was actually written.
+
+**Verified live (actually run)**
+- **(a) Change reaches the sheet.** Add 20 Air Filter: Resources row showed 55 and Activity gained a row with before/after and sync status; later changes (Oil Filter +5, Brake Pads −10) did the same. Commit-to-"spreadsheet synced" time, from the event's `createdAt` to the worker's log line, with the worker idle-polling at 1 s: **3.8 s, 2.8 s, 2.5 s** (three samples; target was about 10 s). `list-events` showed `pending` right after the change and `synced` a few seconds later.
+- **(b) Failure leaves the change intact.** With the integration temporarily pointed at a nonexistent sheet id (set by SQL on the dev database, then restored), the change was committed and the board showed the new quantity, the event went to `failed` at once with "The spreadsheet was not found. Check its id and that it still exists.", the worker logged that it was giving up, and after restoring the id, `retry-sync` for that event turned it `synced`. This exercised a 404 (permanent error) path. **Not exercised live:** a 403 after un-sharing the sheet, and the retryable/backoff path (429/5xx) against real Google (covered only with the fake).
+- **(c) Backlog.** With the worker stopped, a change left `get-workspace` showing `spreadsheetSync: pending 1`; starting the worker cleared it to 0 and the rows appeared in the sheet. The worker also stopped cleanly on SIGTERM (exit 0) three times.
+- Afterwards the dev database was reset to fixtures (`db:reset`, which keeps the sheet connection) and the workspace reconnected so the Resources tab shows the fixture values again.
+
+**Not verified / caveats**
+- Not driven by a real Claude session (a script played the client), and the worker was only run for minutes, not hours.
+- The real Sheets API quotas were not looked up. The Google docs site is blocked here; read them from the Cloud console.
+- The Activity tab still holds the five rows from these tests (events that no longer exist after the reset). The worker only appends, so the user can delete those rows by hand; they do not affect later syncing.
+- The sheet's sharing settings were not inspected: the shared link ends in `?usp=sharing` (what Google appends to any share link). The user should confirm it is shared only with the service account and not "anyone with the link" (the setup guide says so).
+- The key file's permissions (`chmod 600`) could not be checked by the assistant (listing the file was blocked); `chmod` printing nothing is normal, it only prints on error. The key sits in `~/Downloads`; recommended to move it (see Next actions).
+
+**Decisions / findings**
+- M3 is marked done on this evidence. Nothing in the code changed: the live run found no defects.
+- `retry-sync` takes an `eventId` (not a workspace); find it with `list-events`. The change tools take the resource as `resource`, not `target`.
+
+**Next actions**: see "Next actions" item 1 (move the key, create `.env`, quotas), then the rest of M4.
 
 ### 2026-10-19 — M4 (first slice): live-board web server, page and demo script
 
