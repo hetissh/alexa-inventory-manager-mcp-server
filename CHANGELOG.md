@@ -5,17 +5,17 @@
 
 ## Current state
 
-_Last updated: 2026-10-19 (end of M2)._
+_Last updated: 2026-10-19 (M3 built; waiting for Google credentials to verify it live)._
 
 | Item | Status |
 | --- | --- |
 | Product | VoiceOps: voice-controlled operations (inventory, equipment, menu items, repair jobs) with an audited event ledger. This repo is the **MCP server** that lets Claude act as the "voice" while Alexa/Fire TV/dashboard come later. Product spec: `voiceops-hackathon-build-plan.md` (outside the repo; summarised in `docs/mcp-server-plan.md`). |
-| Milestone | **M2 complete** (full operations). **M3 (Google Sheets) not started.** |
-| Git | `main` holds the M0 scaffold commit. Branch `feat/m1-core-loop` (cut from `main`; the name predates M2) holds the M1 commit and the M2 commit on top of it. **Not merged into `main`, not pushed** (remote `origin` is set). |
-| Gate | `npm run local:gate` is green: typecheck, lint, 439 tests in 34 files, 99.8 % line coverage with every file at or above the 90 % per-file threshold, build. Needs PostgreSQL running. |
-| Registered with Claude? | **Not by us.** The user plugs the server into Claude themselves (see "Connect it to Claude" in `README.md`). An earlier registration must be updated: add `VOICEOPS_WORKSPACES=northside-warehouse,harbor-cafe,eastside-repairs` to use the cafe and repair demos, restart the client after rebuilding, and run `npm run db:setup` once (migration `0002`; the server refuses to start with the schema behind). |
-| What works | 13 tools: `check-health`, `get-workspace`, `find-resources`, `get-resource`, `get-board`, `list-events`, `list-alerts`, `adjust-quantity`, `set-status`, `assign-job`, `undo-last-change`, `confirm-command`, `cancel-command`. Three fictional workspaces on one engine (warehouse, cafe, repair shop). Server-enforced confirmation tokens, undo, low-stock alerts, a versioned board snapshot, an allow-list of workspaces. |
-| What does not exist yet | Google Sheets worker (the outbox table and enqueue path exist; nothing consumes jobs, so `sync.sheets` is `not_configured` or stays `pending`), `retry-sync` and demo-only tools, HTTP transport and auth, board HTTP endpoint, MCP elicitation, cleanup of old pending changes. |
+| Milestone | **M2 complete.** **M3 (Google Sheets) is built and tested against a fake spreadsheet, but NOT yet run against real Google**: it needs the user's Google Cloud project, service account and Sheet (see "Next actions"). It is not marked done until that live check passes. |
+| Git | `main` holds the M0 scaffold commit. Branch `feat/m1-core-loop` (cut from `main`; the name predates M2) holds the M1, M2 and M3 commits (M3 on top). Nothing is merged into `main` or pushed (remote `origin` is set). |
+| Gate | `npm run local:gate` is green: typecheck, lint, 569 tests in 45 files, 99.8 % line coverage with every file at or above the 90 % per-file threshold, build. Needs PostgreSQL running. |
+| Registered with Claude? | **Not by us.** The user plugs the server into Claude themselves (see "Connect it to Claude" in `README.md`). An earlier registration must be updated: add `VOICEOPS_WORKSPACES=northside-warehouse,harbor-cafe,eastside-repairs` to use the cafe and repair demos, restart the client after rebuilding, and run `npm run db:setup` once (the server refuses to start with the schema behind). M3 adds no migration. |
+| What works | 14 tools (15 with demo tools): the 13 from M2 plus `retry-sync` (and the demo-only `reset-workspace`). Three fictional workspaces on one engine. Server-enforced confirmation tokens, undo, low-stock alerts, a versioned board snapshot, an allow-list of workspaces. **Spreadsheet sync:** `npm run sheets -- connect|check|disconnect` and a separate worker process (`npm run worker`) that rewrites the Resources tab and appends the Activity tab, in batches, with locking, backoff, retries and visible failures. Exercised against an in-memory spreadsheet and the real Google client library's "no credentials" path only. |
+| What does not exist yet | Any proof against real Google (credentials needed), HTTP transport and auth, board HTTP endpoint, MCP elicitation, cleanup of old pending changes, back-fill of pre-connection history into Activity. |
 
 ### How to run and verify
 
@@ -26,21 +26,18 @@ npm --prefix server-ts install        # once
 npm run db:setup                      # from repo root: create DB "voiceops", migrate, seed all three demo workspaces (safe to repeat)
 npm run local:gate                    # from repo root; delegates to server-ts
 node server-ts/dist/bin.js            # after build; speaks MCP on stdio
+npm run worker                        # after build; the spreadsheet sync worker (needs Google credentials, see docs/google-sheets-setup.md)
 ```
 
-### Next actions (M3: Google Sheets) — start here
+### Next actions — start here
 
-Exit condition (plan §10): a Claude command changes the database **and** the Sheet within about 10 s; a forced Sheet failure leaves the internal change intact and shows `retrying` / `failed` in `list-events`.
+**1. Finish M3 (blocked on the user).** M3's exit condition (plan §10) can only be checked with real Google: a Claude command changes the database **and** the Sheet within about 10 s, and a forced Sheet failure leaves the internal change intact and shows `retrying` / `failed` in `list-events`.
+The user sets up Google following `docs/google-sheets-setup.md` and gives (none of it secret): the **sheet URL or id per workspace** (and which workspace each is for), the **service-account email**, and the **absolute path of the key file — never its contents** (it is a secret; it must stay outside the repo and out of any chat). The user creates `server-ts/.env` with `GOOGLE_APPLICATION_CREDENTIALS=<path>` by hand (an AI cannot write `.env*` files here). Then, either of them:
+   - `npm run sheets -- connect <workspace> <url>`, `npm --prefix server-ts run build`, `npm run worker`;
+   - check (a) a change via Claude shows in Resources and Activity within ~10 s (record the measured time); (b) unshare the sheet or point it at a wrong id: the update goes `failed` with a readable `syncError` in `list-events`, the change itself and the board are unaffected, and after fixing it `retry-sync` turns it `synced`; (c) with the worker stopped, `get-workspace` shows the backlog, and starting the worker clears it; (d) look up the real Sheets API quotas in the Cloud console and note them here (the docs site was blocked from the build environment);
+   - record the results in the log below and mark M3 done. If key creation is blocked by org policy, `gcloud auth application-default login` works with no code change.
 
-**Needs the user first:** a Google Cloud project with the Sheets API enabled, a service account, and one Google Sheet shared with it (an AI cannot create these accounts). The key file must live outside the repo and be referenced by `GOOGLE_APPLICATION_CREDENTIALS`.
-
-1. **Dependency:** pick the Sheets client (`googleapis` or `google-auth-library` + `fetch`); look up the current version and check the licence before adding (plan §8).
-2. **Schema:** migration `0003` adding `sheet_rows (workspace_id, resource_id, row_number)`. A way to set `workspaces.integrations.sheets.spreadsheetId` (a `db:` CLI subcommand). The enqueue path already writes a `sync_jobs` row in the commit transaction when that key is present (`app/commit.ts`).
-3. **Port and adapter:** `SheetsGateway` interface (in `app/ports.ts` or its own port) + a Google implementation in `src/infra/sheets/` + a fake for tests. Tabs and columns are in plan §9 (Resources: `Resource ID | Type | Name | Quantity | Unit | Status | Assignee | Updated at`; Activity: `Event ID | Time | Actor | Operation | Resource | Before | After | Sync status`). Store the row mapping by resource id, never by display name.
-4. **Worker as a separate process** (own bin, e.g. `src/worker/bin.ts`; a stdio MCP server cannot host background jobs): claim jobs with `FOR UPDATE SKIP LOCKED`, status `pending → in_progress → synced | retrying | failed`, exponential backoff with a cap and a maximum attempt count, idempotent append (look for the event id before appending, so a crash between append and mark-synced cannot duplicate a row). Multiple instances must be safe.
-5. **Tools:** `retry-sync {eventId}` and the demo-only `reset-workspace` behind `VOICEOPS_DEMO_TOOLS=1` (plan §3). `list-events` already reports per-event `sync`; `app/spoken.ts` already words every sync state.
-6. **Tests:** worker with the fake gateway (success, transient failure → retrying → synced, permanent failure → failed, duplicate-safe retry, two workers racing), adapter unit tests, a test that a Sheets failure never undoes the internal commit. Keep ≥ 90 % per-file coverage; update this file, `README.md`, `docs/mcp-server-plan.md`.
-7. Check the current Sheets API quotas and batch writes.
+**2. M4 (hardening)**, once M3 is verified: Streamable HTTP transport with auth (bearer/OAuth, `Origin` validation, bind to localhost, token → actor and workspace) for claude.ai connectors and a future dashboard; a read-only board endpoint (`GET /workspaces/{id}/board`, the `get-board` contract) for the Fire TV; a scripted demo prompt and three clean consecutive rehearsals (`reset-workspace` exists for this); optional MCP elicitation as a second approval route; clean-up of expired pending changes; tidy the branch (rename `feat/m1-core-loop`, merge to `main`). Later: the Alexa adapter calling the same `CommandService`.
 
 ### Decisions and assumptions in force
 
@@ -79,6 +76,18 @@ Decisions made during M2 (not asked of the user; revisit if they disagree):
 25. **An exact name beats a longer name that merely contains it** ("Rahul" resolves to Rahul even if a "Rahul Iyer" exists); a first name that fits two technicians equally asks which one.
 26. `equipmentStatuses` moved from `Template` into `WorkspaceSettings`, with `menuItemStatuses`, `statusLabels`, `statusAliases`.
 
+Decisions made during M3 (not asked of the user; revisit if they disagree):
+
+27. **The Resources tab is a snapshot rewritten from the database**, not per-row edits, so there is no `sheet_rows` table (a deviation from plan §9's "update the matching row"). It is complete, self-healing and keyed by resource id; the cost is one whole-tab write per cycle and a ~900-resource limit on a default tab. Hand edits to the tab are overwritten by design.
+28. **Batches per workspace under a session-level advisory lock** (`pg_try_advisory_lock(727275, hashtext(workspace))`): one worker at a time per workspace, the workspace state is read *after* the lock (so a later writer always writes later state), all due jobs of the workspace are claimed together (one Resources write + one Activity append per cycle), and a dead worker's lock vanishes with its connection. `FOR UPDATE SKIP LOCKED` was not needed.
+29. **Activity is append-only and idempotent:** read the event ids present, append only the missing ones, last, after the Resources write. A retry after a lost acknowledgement adds no duplicate.
+30. **Error classes:** `SheetsError(retryable)`. Retryable: 408/429/5xx, a 403 that mentions rate limits/quota, and anything unclassified (dropped connections). Permanent (fail at once, message says what to fix): 401, 403 access denied, 404, 400, missing credentials. Backoff 2 s doubling to 60 s, 8 attempts, 60 s lease for abandoned jobs (`DEFAULT_SYNC_OPTIONS`); polling interval via `VOICEOPS_SYNC_POLL_MS`.
+31. **An extra last `Details` column** on Resources (price, job description, reorder level); the plan's eight columns are unchanged and Activity is exactly the plan's eight. Times are ISO 8601 UTC.
+32. **Google client:** `@googleapis/sheets` 18.1.1 (Apache-2.0, ~0.8 MB, Node ≥ 22) rather than `googleapis` (~246 MB); credentials via Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS`), scope `spreadsheets` only. Cells are written `RAW` so nothing is parsed as a formula.
+33. **The MCP server never touches Google or the key file;** only the worker and the `sheets` CLI do.
+34. **Demo tool `reset-workspace`** exists only with `VOICEOPS_DEMO_TOOLS=true` *and* a local database (checked before connecting), requires an explicit `confirm: true`, is flagged `destructiveHint`, and only resets demo workspaces on the allow-list.
+35. `list-events` and `get-board` show `syncError`; `get-workspace` shows the sync backlog (pending / retrying / failed), so a worker that is not running is visible.
+
 ### Gotchas
 
 - **Node version:** default shell Node is v18.18.2. Anything run with it will fail (vitest 5 needs Node ≥ 22.12; the `db:*` scripts use `--env-file-if-exists`). MCP clients do not load nvm, so register the server with an **absolute** Node path, e.g. `/opt/homebrew/opt/node@24/bin/node` (v24.3.0), never a bare `node`.
@@ -87,6 +96,10 @@ Decisions made during M2 (not asked of the user; revisit if they disagree):
 - **PostgreSQL on this machine** has other projects' databases (`upms_sync`, `rl-hexagon-pwa`): never touch them. This project only creates `voiceops` (dev) and `voiceops_test` (tests) plus short-lived `voiceops_test_tmp_*` databases that the tests drop.
 - **Tests need a running PostgreSQL.** `tests/global-setup.ts` creates and migrates `voiceops_test` and refuses a `TEST_DATABASE_URL` whose name lacks "test". Test files run serially (`fileParallelism: false`) because they share and reset that database; every integration test resets **all three** demo workspaces (`resetAll`). A failure to connect gives an actionable message; it is never skipped.
 - `db:reset` deliberately **keeps** `workspaces.integrations` (configuration); the test helper clears it so tests do not leak a configured spreadsheet.
+- **Google's documentation site (`developers.google.com`) is blocked by org policy in the build environment**, so the Sheets API quotas and console steps could not be checked against the source; the setup guide is written from knowledge, not verified, and the quotas must be read from the Cloud console.
+- **A key file path needs a `.env` the user creates** (`server-ts/.env`, loaded by `npm run worker` / `npm run sheets` via `--env-file-if-exists`); an AI cannot write `.env*` here. The key itself must never be pasted anywhere or read by an assistant.
+- **Worker tests need a clock ahead of the database's:** jobs are stamped with the database's `now()`, so `realClock()` in `tests/helpers/sync.ts` starts a minute ahead of real time.
+- **vitest 5 mocks used with `new`** must be function expressions, not arrows (see `tests/unit/googleClient.test.ts`).
 - **Not covered by tests (documented):** the `ROLLBACK`/rethrow path at the end of `infra/db/seed.ts` (lines 56–57), and one branch in `pgStore.ts` (a unique violation on an unrelated constraint). Both files stay above the threshold.
 - **Single-member unions:** `OPERATION_NAMES` is now four long, but `ALERT_RULES` has one member, so `src/domain/board.ts` carries a justified `eslint-disable` for `no-unnecessary-condition`; remove it when a second rule exists.
 - **TypeScript is pinned `~6.0.3`** because `typescript-eslint@8.71` declares peer `typescript <6.1.0`. TypeScript 7.x is "latest" on npm; revisit when typescript-eslint supports it.
@@ -102,10 +115,31 @@ Decisions made during M2 (not asked of the user; revisit if they disagree):
 | M0 Scaffold | TS project, lint, vitest, gates, hello tools over stdio, Claude registration docs | **Done** 2026-10-18 |
 | M1 Core loop | Postgres, `adjust-quantity` end to end, warehouse fixture, read tools | **Done** 2026-10-19 |
 | M2 Full operations | `set-status`, `assign-job`, confirmation tokens, disambiguation, café/repair templates, alerts, board, undo, workspace allow-list | **Done** 2026-10-19 |
-| M3 Sheets | Outbox worker, row mapping, retries, sync status | Not started (outbox table + enqueue path exist) |
-| M4 Hardening | Streamable HTTP + auth, board endpoint, demo reset, rehearsal | Not started |
+| M3 Sheets | Outbox worker, retries, sync status, `retry-sync` | **Built 2026-10-19; live verification against real Google pending** (needs the user's credentials) |
+| M4 Hardening | Streamable HTTP + auth, board endpoint, rehearsal (demo reset tool already exists) | Not started |
 
 ## Log (newest first)
+
+### 2026-10-19 — M3: spreadsheet sync (built; live verification pending)
+
+**Done**
+- **Ports and rows** (`src/app/`): `SheetsGateway`, `SyncQueue` and friends (`syncPorts.ts`), `SheetsError`, pure row builders for both tabs (`sheetRows.ts`), `syncWorker.ts` (batch per workspace, backoff, lease takeover, polling loop that survives failed cycles), `syncService.ts` (`retry`).
+- **Infra:** PostgreSQL queue with the per-workspace advisory lock (`pgSyncQueue.ts`), `setSheetsIntegration`, store additions (`listEventsByIds`, `requeueSync`, `getSyncBacklog`, `syncError` on events), the Google gateway with error classification (`infra/sheets/googleGateway.ts`) over a small `SheetsApi`, and the real client adapter (`googleClient.ts`, RAW writes, Sheets scope only). No migration was needed.
+- **Processes and CLI:** `src/worker/{main,bin}.ts` (separate process, clean shutdown on SIGINT/SIGTERM), `src/cli/sheets*.ts` (`connect` proves access, creates the tabs, writes the current state, then enables syncing; `check`; `disconnect`; accepts a sheet URL or id), npm scripts `sheets` / `worker` / `worker:dev` (also at the repo root).
+- **MCP:** tools `retry-sync` and the gated `reset-workspace`; `list-events` / `get-board` carry `syncError`; `get-workspace` carries the backlog; server instructions explain pending → synced and retry-sync.
+- **Config:** `VOICEOPS_SYNC_POLL_MS`, `VOICEOPS_DEMO_TOOLS`; `GOOGLE_APPLICATION_CREDENTIALS` is read by Google's library only.
+- **Docs:** `docs/google-sheets-setup.md` (what the user must do and hand over, commands, troubleshooting, limits), `README.md`, `docs/mcp-server-plan.md` §7 as built.
+
+**Verified (actually run)**
+- `npm run local:gate` green: typecheck, lint (layering rules included), 569 tests in 45 files, 99.8 % lines / 99.8 % branches / 100 % functions, every file ≥ 90 %, build.
+- Against an in-memory spreadsheet and real PostgreSQL: a burst of changes is written once (one Resources write, one Activity append) and every job ends `synced`; a retryable failure marks the update `retrying` with the reason and a 2 s backoff that doubles, is capped, and ends in `synced` or, after 8 attempts, `failed`; a non-retryable failure fails at once; unclassified errors retry; a lost acknowledgement does not duplicate an Activity row; a disconnected workspace fails with a clear message; `retry-sync` requeues and then succeeds; a held workspace lock makes another worker report `busy`; two racing workers write each change exactly once; a job abandoned by a dead worker is taken over after its lease; the polling loop syncs new work, survives a failing cycle and stops on abort; the worker process syncs and shuts down on SIGTERM and refuses a bad config, an unreachable database and a schema that is behind; the CLI connects, checks, disconnects and refuses bad input, and does not connect when the sheet cannot be reached; the gateway creates only missing tabs and headers, writes header + rows then clears the tail, and classifies errors; the Google client adapter sends RAW values, `INSERT_ROWS` and only the Sheets scope.
+- The **real** Google client library, with no credentials: `npm run sheets -- connect northside-warehouse <fake id>` printed "Google credentials are not set up: point GOOGLE_APPLICATION_CREDENTIALS at the service-account key file." and left the dev database unconnected. The root `npm run sheets` / `npm run worker` scripts forward their arguments.
+- **Not verified:** anything against real Google Sheets (no credentials exist yet), the ~10 s end-to-end target, real Sheets API quotas, the setup guide's console steps (the Google docs site was blocked), the worker as a long-running process over hours, MCP Inspector, a real Claude session. Committed on `feat/m1-core-loop` after the M2 commit (not merged, not pushed); the commit hook's company security checks (gitleaks) run on commit.
+
+**Decisions / findings**
+- See decisions 27–35. The big one: the Resources tab is a rewritten snapshot, so no `sheet_rows` table and no row-mapping bugs, at the cost of a whole-tab write per cycle.
+- Per-workspace advisory locking replaced the plan's `SKIP LOCKED` claim: two workers could otherwise write older state over newer state with no later job to repair it.
+- Testing needed a clock ahead of the database's (jobs are stamped by Postgres); a hidden source of "idle" results until found.
 
 ### 2026-10-19 — M2: confirmation, status/assign/undo, alerts, board, three workspaces
 

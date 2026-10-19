@@ -1,7 +1,9 @@
 import { z } from 'zod';
 
 import type { CommandService } from '../../app/commandService.js';
+import type { DemoAdmin } from '../../app/ports.js';
 import type { ReadService } from '../../app/readService.js';
+import type { SyncService } from '../../app/syncService.js';
 import { workspaceIdSchema } from '../../domain/schemas.js';
 import type { Logger } from '../../logger.js';
 
@@ -24,6 +26,9 @@ export interface ToolContext {
   readonly actorId: string;
   readonly commands: CommandService;
   readonly reads: ReadService;
+  readonly sync: SyncService;
+  /** Only present when demo tools are enabled. */
+  readonly demo: DemoAdmin | undefined;
 }
 
 /** The optional `workspaceId` input every tool accepts. */

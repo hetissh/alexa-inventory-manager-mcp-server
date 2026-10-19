@@ -11,6 +11,8 @@ import { registerGetResource } from './getResource.js';
 import { registerGetWorkspace } from './getWorkspace.js';
 import { registerListAlerts } from './listAlerts.js';
 import { registerListEvents } from './listEvents.js';
+import { registerResetWorkspace } from './resetWorkspace.js';
+import { registerRetrySync } from './retrySync.js';
 import { registerSetStatus } from './setStatus.js';
 import { registerUndoLastChange } from './undoLastChange.js';
 
@@ -29,4 +31,8 @@ export function registerTools(server: McpServer, context: ToolContext): void {
   registerUndoLastChange(server, context);
   registerConfirmCommand(server, context);
   registerCancelCommand(server, context);
+  registerRetrySync(server, context);
+  if (context.demo) {
+    registerResetWorkspace(server, context, context.demo);
+  }
 }

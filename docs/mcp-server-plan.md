@@ -48,7 +48,7 @@ Claude Desktop / Code                later: Alexa Lambda · Dashboard · Fire TV
 
 **Operation registry.** Each operation is one file with five parts: an args schema, `validate(resource, args, config)`, `needsConfirmation(...)`, `apply(...)` and `readback(...)`. Adding an operation means adding a file. The café, warehouse and repair-shop templates are data only (types, allowed statuses, thresholds, board layout).
 
-**Layout** (as built through M2; `[M3]`/`[M4]` marks what is still to come). Import direction is enforced by ESLint (`domain ← templates ← app ← {infra, mcp}`); only `main.ts`, `composition.ts` and `cli/` wire layers together.
+**Layout** (as built through M3; `[M4]` marks what is still to come). Import direction is enforced by ESLint (`domain ← templates ← app ← {infra, mcp}`); only `main.ts`, `composition.ts` and `cli/` wire layers together.
 
 ```text
 /
@@ -59,14 +59,17 @@ Claude Desktop / Code                later: Alexa Lambda · Dashboard · Fire TV
     src/
       bin.ts  main.ts  composition.ts  config.ts  logger.ts  lifecycle.ts  stdout-guard.ts  errorMessage.ts  version.ts
       mcp/        server.ts  views.ts  tools/{checkHealth,getWorkspace,findResources,getResource,getBoard,listEvents,listAlerts,
-                  adjustQuantity,setStatus,assignJob,undoLastChange,confirmCommand,context,writeResult,index}.ts
+                  adjustQuantity,setStatus,assignJob,undoLastChange,confirmCommand,retrySync,resetWorkspace,context,writeResult,index}.ts
                   resources.ts [M4]  prompts.ts [M4]
       app/        commandService.ts  commit.ts  readService.ts  ports.ts  outcomes.ts  spoken.ts  errors.ts  confirmationCode.ts
+                  syncWorker.ts  syncService.ts  syncPorts.ts  sheetRows.ts
       domain/     schemas.ts  types.ts  matcher.ts  normalize.ts  status.ts  board.ts  json.ts
                   operations/{types,adjustQuantity,setStatus,assignJob,reverseEvent,registry}.ts   rules/{lowStock,index}.ts
       templates/  types.ts  shared.ts  warehouse.ts  cafe.ts  repair.ts  index.ts
-      infra/      db/{pool,migrator,admin,pgStore,seed}.ts  db/migrations/*   sheets/{adapter,worker} [M3]
-      cli/        db.ts  dbBin.ts   (create | migrate | seed | reset | setup)
+      infra/      db/{pool,migrator,admin,pgStore,pgSyncQueue,integrations,seed}.ts  db/migrations/*
+                  sheets/{googleGateway,googleClient}.ts
+      worker/     main.ts  bin.ts   (the spreadsheet sync process)
+      cli/        db.ts dbBin.ts (create | migrate | seed | reset | setup)   sheets.ts sheetsBin.ts (connect | check | disconnect)
     tests/        unit/  integration/ (real PostgreSQL)  e2e/ (spawned stdio process)  helpers/
   service-py/     reserved — not created yet
 ```
@@ -93,7 +96,8 @@ Tools are intent-level and few so Claude picks them reliably. `resource` accepts
 | ✅ `assign-job {job, assignee, idempotencyKey?}` | write | `ASSIGN_JOB` |
 | ✅ `undo-last-change {idempotencyKey?}` | write | `REVERSE_EVENT` |
 | ✅ `confirm-command {token}` / `cancel-command {token}` | write | Second phase of confirmation |
-| `reset-workspace`, `retry-sync` | demo | Registered only if `VOICEOPS_DEMO_TOOLS=1` |
+| ✅ `retry-sync {eventId}` | write | Put a failed or retrying spreadsheet update back in the queue |
+| ✅ `reset-workspace {confirm: true}` | demo | Restore a demo workspace's starting data; registered only if `VOICEOPS_DEMO_TOOLS` is on and the database is local |
 
 **One result envelope for all writes:**
 
@@ -139,7 +143,7 @@ Mark `confirm-command` with `destructiveHint` so the client's own permission pro
 
 ## 5. Data model and commit transaction
 
-**Tables:** `workspaces` (with `board_version` and an `integrations` jsonb, e.g. `{"sheets": {"spreadsheetId": "…"}}`; no key means the destination is not configured), `resources` (jsonb `attributes`, `aliases`, `version`), `events` (columns `request_args`, `before_state`, `after_state`, `summary`, `client_name`), `sync_jobs`, `commands` (pending changes awaiting a yes, token hash only), `alerts` (partial unique index: one open alert per resource and rule), and, still to come, `sheet_rows` [M3], `devices` (stub). Built: `workspaces`, `resources`, `events`, `sync_jobs` (migration `0001_init`) and `commands`, `alerts`, a unique index on `events.reversal_of` (migration `0002_confirmations_alerts`). Migrations are TypeScript modules in `infra/db/migrations/` applied by `npm run db:migrate`; the server refuses to start if the schema is behind.
+**Tables:** `workspaces` (with `board_version` and an `integrations` jsonb, e.g. `{"sheets": {"spreadsheetId": "…"}}`; no key means the destination is not configured), `resources` (jsonb `attributes`, `aliases`, `version`), `events` (columns `request_args`, `before_state`, `after_state`, `summary`, `client_name`), `sync_jobs`, `commands` (pending changes awaiting a yes, token hash only), `alerts` (partial unique index: one open alert per resource and rule), and `devices` (stub, later). `sheet_rows` was planned but not needed: the Resources tab is rewritten as a snapshot (§7). Built: `workspaces`, `resources`, `events`, `sync_jobs` (migration `0001_init`) and `commands`, `alerts`, a unique index on `events.reversal_of` (migration `0002_confirmations_alerts`). Migrations are TypeScript modules in `infra/db/migrations/` applied by `npm run db:migrate`; the server refuses to start if the schema is behind.
 
 **Constraints that carry the guarantees:**
 - `events.command_id` is unique.
@@ -174,11 +178,15 @@ As built in M1 (thresholds in `domain/matcher.ts`):
 
 ## 7. Sheets worker
 
-- Polls `sync_jobs` with `FOR UPDATE SKIP LOCKED` (multiple instances are safe). Status moves `pending → synced | retrying | failed`.
-- Exponential backoff, capped, with a maximum attempt count.
-- Updates the Resources row via `sheet_rows` (never by display name). Appends to Activity with the event ID in the row; on retry it checks for that event ID first so a crash between append and mark-synced cannot duplicate rows.
-- Service-account key loaded from a path or secret manager outside the repo. `.env` is gitignored. Batch writes; check current Sheets API quotas before the demo.
-- A Sheet failure never undoes the internal commit. The status shows as retrying or failed in `list-events`.
+**As built (M3).** The outbox is `sync_jobs`: a job is written in the same transaction as its event whenever the workspace has `integrations.sheets` (set by `npm run sheets -- connect`). A **separate process** (`npm run worker`, `src/worker/`; a stdio MCP server cannot host background jobs) processes them.
+
+- **Per workspace, in batches.** Each cycle the worker picks a workspace with due jobs, takes a session-level Postgres advisory lock for it (so two workers never write one sheet together; the lock disappears if the worker dies), claims *all* of that workspace's due jobs, reads the workspace's state **after** taking the lock, writes once, and marks them. A burst of changes costs one Resources write and one Activity append, not one per change.
+- **Resources tab = snapshot, not per-row edits** (a deliberate deviation from "update the matching row"): the tab is rewritten from the database each time, header first, keyed by resource id and ordered by type then name. It is always complete, self-healing (a deleted tab or edited cell is repaired on the next sync) and needs no row-mapping table (`sheet_rows` was not built). Columns: the plan's eight plus a final `Details` (price, job description, reorder level).
+- **Activity tab is append-only and idempotent:** the worker reads the event ids already present and appends only the missing ones, so a retry after a lost acknowledgement cannot duplicate a row. The row is added last, after the Resources write, so "synced" in it is true.
+- **Status and retries:** `pending → in_progress → synced | retrying | failed`. A temporary problem (rate limit, 5xx, dropped connection, anything unclassified) retries with exponential backoff (2 s, doubling, capped at 60 s) up to 8 attempts; a problem a retry cannot fix (no access, wrong id, bad or missing credentials) fails at once with a message saying what to fix. A job another worker abandoned (still `in_progress` after a 60 s lease) is taken over. `last_error` is shown by `list-events`; `retry-sync` requeues a failed or retrying job. A failure never touches the internal commit.
+- **Safety:** values are written `RAW` (a name like `=HYPERLINK(...)` stays text); credentials come from Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS`), are read only by Google's client library, and never appear in logs or errors; the scope is `spreadsheets` only.
+- **Limits:** about 900 resources per workspace on a default 1,000-row tab; hand edits to Resources are overwritten; changes made before a workspace is connected are not back-filled into Activity; the current Sheets API quotas could not be verified (Google's documentation site was unreachable from the build environment), so batching is the mitigation and the console quota page is the check.
+- Setup for a person: [`google-sheets-setup.md`](google-sheets-setup.md).
 
 ## 8. Security and compliance
 

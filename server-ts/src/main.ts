@@ -46,6 +46,8 @@ export async function main(deps: MainDeps): Promise<RunningServer> {
     actorId: config.actorId,
     commands: services.commands,
     reads: services.reads,
+    sync: services.sync,
+    demo: services.demo,
   });
 
   const performShutdown = async (reason: string): Promise<void> => {

@@ -82,6 +82,7 @@ describe('stdio server process (end to end)', () => {
       'get-workspace',
       'list-alerts',
       'list-events',
+      'retry-sync',
       'set-status',
       'undo-last-change',
     ]);

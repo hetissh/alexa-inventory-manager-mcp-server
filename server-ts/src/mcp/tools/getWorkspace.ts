@@ -23,6 +23,13 @@ const outputSchema = {
     menuItemStatuses: z.array(z.string()).optional().describe('Statuses menu items can have (only if this workspace has a menu).'),
   }),
   spreadsheet: z.enum(['configured', 'not_configured']),
+  spreadsheetSync: z
+    .object({
+      pending: z.number().int().describe('Updates waiting to be written, or being written now.'),
+      retrying: z.number().int().describe('Updates that failed and will be tried again.'),
+      failed: z.number().int().describe('Updates that gave up. retry-sync can try them again.'),
+    })
+    .describe('How the background spreadsheet sync is doing. Waiting updates that never clear mean the sync worker is not running.'),
 };
 
 export function registerGetWorkspace(server: McpServer, context: ToolContext): void {
@@ -57,6 +64,7 @@ export function registerGetWorkspace(server: McpServer, context: ToolContext): v
           ...(counts.menu_item ? { menuItemStatuses: settings.menuItemStatuses } : {}),
         },
         spreadsheet: info.workspace.integrations.sheets ? 'configured' : 'not_configured',
+        spreadsheetSync: info.syncBacklog,
       });
     },
   );

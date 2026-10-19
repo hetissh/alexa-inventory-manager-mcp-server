@@ -1,5 +1,5 @@
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { SERVER_INSTRUCTIONS } from '../../src/mcp/server.js';
 import { SERVER_NAME, SERVER_VERSION } from '../../src/version.js';
@@ -67,6 +67,7 @@ describe('tool catalogue conventions (AGENTS.md)', () => {
       'get-workspace',
       'list-alerts',
       'list-events',
+      'retry-sync',
       'set-status',
       'undo-last-change',
     ]);
@@ -93,6 +94,7 @@ describe('tool catalogue conventions (AGENTS.md)', () => {
       'assign-job',
       'cancel-command',
       'confirm-command',
+      'retry-sync',
       'set-status',
       'undo-last-change',
     ]);
@@ -604,5 +606,118 @@ describe('workspaces', () => {
       .then((result) => result.isError === true)
       .catch(() => true);
     expect(refused).toBe(true);
+  });
+});
+
+describe('spreadsheet sync, through MCP', () => {
+  async function failedEventId(connected: ConnectedPair): Promise<string> {
+    await connected.services.pool.query(
+      `UPDATE workspaces SET integrations = '{"sheets":{"spreadsheetId":"spreadsheet-id-1234567890abcdef"}}' WHERE id = $1`,
+      [WORKSPACE_ID],
+    );
+    const added = await call(connected, 'adjust-quantity', { resource: 'air filters', delta: 1 });
+    expect(added.data).toMatchObject({ sync: { sheets: 'pending' } });
+    await connected.services.pool.query(`UPDATE sync_jobs SET status = 'failed', attempts = 8, last_error = 'Google denied access to the spreadsheet.'`);
+    return (added.data['event'] as { eventId: string }).eventId;
+  }
+
+  it('list-events shows each update\'s state and, when it failed, why', async () => {
+    const connected = await connect();
+    await failedEventId(connected);
+
+    const events = await call(connected, 'list-events');
+
+    expect(events.data['events']).toEqual([
+      expect.objectContaining({ sync: 'failed', syncError: 'Google denied access to the spreadsheet.' }),
+    ]);
+    expect((await call(connected, 'get-board')).data['recentActivity']).toEqual([
+      expect.objectContaining({ sync: 'failed', syncError: 'Google denied access to the spreadsheet.' }),
+    ]);
+  });
+
+  it('get-workspace reports the sync backlog, so a worker that is not running shows up', async () => {
+    const connected = await connect();
+    expect((await call(connected, 'get-workspace')).data).toMatchObject({
+      spreadsheet: 'not_configured',
+      spreadsheetSync: { pending: 0, retrying: 0, failed: 0 },
+    });
+
+    await failedEventId(connected);
+    await call(connected, 'adjust-quantity', { resource: 'air filters', delta: 1 });
+
+    expect((await call(connected, 'get-workspace')).data).toMatchObject({
+      spreadsheet: 'configured',
+      spreadsheetSync: { pending: 1, retrying: 0, failed: 1 },
+    });
+  });
+
+  it('retry-sync puts a failed update back in the queue, and is safe to repeat', async () => {
+    const connected = await connect();
+    const eventId = await failedEventId(connected);
+
+    const first = await call(connected, 'retry-sync', { eventId });
+    expect(first).toMatchObject({ isError: false, data: { status: 'queued', workspaceId: WORKSPACE_ID } });
+    expect((await call(connected, 'list-events')).data['events']).toEqual([expect.objectContaining({ sync: 'pending', syncError: null })]);
+
+    expect((await call(connected, 'retry-sync', { eventId })).data).toMatchObject({ status: 'already_queued' });
+    await connected.services.pool.query(`UPDATE sync_jobs SET status = 'synced'`);
+    expect((await call(connected, 'retry-sync', { eventId })).data).toMatchObject({ status: 'already_synced' });
+  });
+
+  it('retry-sync says when there is no such update, and refuses a malformed id', async () => {
+    const connected = await connect();
+    expect((await call(connected, 'retry-sync', { eventId: '0b7c3f5e-6d0a-4f0e-9a52-1b2d3c4e5f60' })).data).toMatchObject({
+      status: 'not_found',
+    });
+    const refused = await connected.client
+      .callTool({ name: 'retry-sync', arguments: { eventId: 'not-a-uuid' } })
+      .then((result) => result.isError === true)
+      .catch(() => true);
+    expect(refused).toBe(true);
+  });
+
+  it('is described honestly to the model: pending turns into synced later, failures can be retried', async () => {
+    const { client } = await connect();
+    expect(client.getInstructions()).toMatch(/"pending" turns into "synced".*retry-sync/);
+  });
+});
+
+describe('the demo-only reset tool', () => {
+  it('does not exist unless demo tools are on', async () => {
+    const { client } = await connect();
+    const { tools } = await client.listTools();
+    expect(tools.map((tool) => tool.name)).not.toContain('reset-workspace');
+  });
+
+  it('is registered, flagged destructive, and resets the chosen workspace when the user\'s request is explicit', async () => {
+    const resetWorkspace = vi.fn(() => Promise.resolve());
+    pair = await connectWithContext({ demo: { resetWorkspace } });
+
+    const { tools } = await pair.client.listTools();
+    expect(tools.find((tool) => tool.name === 'reset-workspace')?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+    });
+    const result = await call(pair, 'reset-workspace', { confirm: true, workspaceId: CAFE_ID });
+
+    expect(result).toMatchObject({ isError: false, data: { status: 'reset', workspaceId: CAFE_ID } });
+    expect(resetWorkspace).toHaveBeenCalledExactlyOnceWith(CAFE_ID);
+  });
+
+  it('defaults to the default workspace, and refuses without an explicit confirm or for a workspace outside the allow-list', async () => {
+    const resetWorkspace = vi.fn(() => Promise.resolve());
+    pair = await connectWithContext({ demo: { resetWorkspace }, workspaceIds: [WORKSPACE_ID] });
+
+    expect((await call(pair, 'reset-workspace', { confirm: true })).data).toMatchObject({ workspaceId: WORKSPACE_ID });
+    for (const args of [{}, { confirm: false }, { confirm: 'yes' }]) {
+      const refused = await pair.client
+        .callTool({ name: 'reset-workspace', arguments: args })
+        .then((result) => result.isError === true)
+        .catch(() => true);
+      expect(refused).toBe(true);
+    }
+    expect((await call(pair, 'reset-workspace', { confirm: true, workspaceId: CAFE_ID })).isError).toBe(true);
+    expect(resetWorkspace).toHaveBeenCalledTimes(1);
   });
 });

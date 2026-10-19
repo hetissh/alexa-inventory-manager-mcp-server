@@ -64,7 +64,25 @@ export interface NewAlert {
 }
 
 /** An event plus the state of its outbound sync to the spreadsheet, if one is configured. */
-export type ListedEvent = EventRecord & { readonly sync: SyncStatus | 'not_configured' };
+export type ListedEvent = EventRecord & {
+  readonly sync: SyncStatus | 'not_configured';
+  /** Why the last sync attempt failed, if it did. */
+  readonly syncError: string | null;
+};
+
+/** How many spreadsheet updates are waiting, being retried, or gave up, for one workspace. */
+export interface SyncBacklog {
+  /** Waiting, or being processed right now. */
+  readonly pending: number;
+  readonly retrying: number;
+  readonly failed: number;
+}
+
+export type RequeueResult =
+  | { readonly result: 'requeued' }
+  /** Nothing to do: the job is already synced or already waiting. */
+  | { readonly result: 'unchanged'; readonly status: SyncStatus }
+  | { readonly result: 'missing' };
 
 /** A consistent read of everything a live board shows, taken in one snapshot. */
 export interface BoardSnapshot {
@@ -107,6 +125,11 @@ export interface Store {
   /** Newest first. */
   listEvents(workspaceId: string, options: { readonly limit: number; readonly resourceId?: string }): Promise<ListedEvent[]>;
   getEvent(workspaceId: string, eventId: string): Promise<EventRecord | undefined>;
+  /** The events that exist among `eventIds`, oldest first. */
+  listEventsByIds(workspaceId: string, eventIds: readonly string[]): Promise<EventRecord[]>;
+  /** Puts a failed or retrying sync job back in the queue, to be tried again straight away. */
+  requeueSync(workspaceId: string, eventId: string, destination: SyncDestination): Promise<RequeueResult>;
+  getSyncBacklog(workspaceId: string): Promise<SyncBacklog>;
   /** The actor's newest event that is not itself an undo and has not been undone. */
   findLastReversibleEvent(workspaceId: string, actor: string): Promise<EventRecord | undefined>;
   findCommandByTokenHash(workspaceId: string, tokenHash: string): Promise<CommandRecord | undefined>;
@@ -117,4 +140,10 @@ export interface Store {
   ping(): Promise<void>;
   /** Commits if `work` resolves, rolls back if it throws. */
   withTransaction<T>(work: (tx: TransactionStore) => Promise<T>): Promise<T>;
+}
+
+/** Operations that only make sense for demos and rehearsals; never available unless explicitly enabled. */
+export interface DemoAdmin {
+  /** Deletes the workspace's events, pending changes and alerts and restores its starting data. */
+  resetWorkspace(workspaceId: string): Promise<void>;
 }

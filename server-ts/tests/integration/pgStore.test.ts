@@ -419,3 +419,53 @@ describe('board snapshot', () => {
     expect(await store.getBoardSnapshot('no-such-workspace', 5)).toBeUndefined();
   });
 });
+
+describe('spreadsheet sync reads', () => {
+  it('lists the events that exist among some ids, oldest first, within the workspace', async () => {
+    const a = await store.withTransaction((tx) => tx.insertEvent(newEvent({ commandId: 'a' })));
+    const b = await store.withTransaction((tx) => tx.insertEvent(newEvent({ commandId: 'b' })));
+    await store.withTransaction((tx) => tx.insertEvent(newEvent({ commandId: 'c' })));
+
+    const found = await store.listEventsByIds(WORKSPACE_ID, [b.eventId, a.eventId, '0b7c3f5e-6d0a-4f0e-9a52-1b2d3c4e5f60']);
+
+    expect(found.map((event) => event.eventId)).toEqual([a.eventId, b.eventId]);
+    expect(await store.listEventsByIds('harbor-cafe', [a.eventId])).toEqual([]);
+    expect(await store.listEventsByIds(WORKSPACE_ID, [])).toEqual([]);
+  });
+
+  it('counts waiting, retrying and failed updates for one workspace only', async () => {
+    const ids: string[] = [];
+    for (const commandId of ['a', 'b', 'c', 'd', 'e']) {
+      ids.push(
+        await store.withTransaction(async (tx) => {
+          const event = await tx.insertEvent(newEvent({ commandId }));
+          await tx.enqueueSync(WORKSPACE_ID, event.eventId, 'sheets');
+          return event.eventId;
+        }),
+      );
+    }
+    for (const [eventId, status] of [
+      [ids[1], 'in_progress'],
+      [ids[2], 'retrying'],
+      [ids[3], 'failed'],
+      [ids[4], 'synced'],
+    ] as const) {
+      await pool.query('UPDATE sync_jobs SET status = $2 WHERE event_id = $1', [eventId, status]);
+    }
+
+    expect(await store.getSyncBacklog(WORKSPACE_ID)).toEqual({ pending: 2, retrying: 1, failed: 1 });
+    expect(await store.getSyncBacklog('harbor-cafe')).toEqual({ pending: 0, retrying: 0, failed: 0 });
+  });
+
+  it('shows why an update failed next to the event', async () => {
+    await store.withTransaction(async (tx) => {
+      const event = await tx.insertEvent(newEvent());
+      await tx.enqueueSync(WORKSPACE_ID, event.eventId, 'sheets');
+    });
+    await pool.query(`UPDATE sync_jobs SET status = 'failed', last_error = 'Google denied access'`);
+
+    const [listed] = await store.listEvents(WORKSPACE_ID, { limit: 1 });
+
+    expect(listed).toMatchObject({ sync: 'failed', syncError: 'Google denied access' });
+  });
+});

@@ -42,7 +42,7 @@ export function registerListEvents(server: McpServer, context: ToolContext): voi
       const base = { status: outcome.status, spoken: outcome.spoken, workspaceId: workspace };
       switch (outcome.status) {
         case 'ok':
-          return toolResult({ ...base, events: outcome.events.map((event) => toEventView(event, event.sync)) });
+          return toolResult({ ...base, events: outcome.events.map((event) => toEventView(event, event.sync, event.syncError)) });
         case 'ambiguous':
           return toolResult({ ...base, query: outcome.query, candidates: outcome.candidates.map(toCandidateView) });
         case 'not_found':

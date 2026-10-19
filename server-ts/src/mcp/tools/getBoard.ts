@@ -59,7 +59,7 @@ export function registerGetBoard(server: McpServer, context: ToolContext): void 
           hasAlert,
         })),
         alerts: board.alerts.map(toAlertView),
-        recentActivity: board.recentActivity.map((event) => toEventView(event, event.sync)),
+        recentActivity: board.recentActivity.map((event) => toEventView(event, event.sync, event.syncError)),
       });
     },
   );

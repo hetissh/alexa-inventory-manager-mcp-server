@@ -2,7 +2,7 @@ import type { Readable } from 'node:stream';
 
 export type ShutdownSignal = 'SIGINT' | 'SIGTERM';
 
-const SHUTDOWN_SIGNALS: readonly ShutdownSignal[] = ['SIGINT', 'SIGTERM'];
+export const SHUTDOWN_SIGNALS: readonly ShutdownSignal[] = ['SIGINT', 'SIGTERM'];
 const STDIN_CLOSE_EVENTS = ['end', 'close'] as const;
 
 /** The subset of `process` used to subscribe to shutdown signals. */

@@ -70,6 +70,7 @@ interface EventRow extends QueryResultRow {
   created_at: Date;
   reversal_of: string | null;
   sync_status?: SyncStatus | null;
+  sync_error?: string | null;
 }
 
 interface AlertRow extends QueryResultRow {
@@ -196,7 +197,9 @@ const ALERT_COLUMNS = `a.*, r.name AS resource_name`;
 const ALERT_JOIN = `JOIN resources r ON r.workspace_id = a.workspace_id AND r.id = a.resource_id`;
 
 /** Read queries, usable on the pool or inside a transaction/snapshot. */
-function createReads(db: Queryable): Omit<Store, 'ping' | 'withTransaction' | 'getBoardSnapshot'> {
+function createReads(
+  db: Queryable,
+): Omit<Store, 'ping' | 'withTransaction' | 'getBoardSnapshot' | 'requeueSync'> {
   return {
     async getWorkspace(workspaceId) {
       const result = await db.query<WorkspaceRow>(
@@ -220,7 +223,7 @@ function createReads(db: Queryable): Omit<Store, 'ping' | 'withTransaction' | 'g
 
     async listEvents(workspaceId, options): Promise<ListedEvent[]> {
       const result = await db.query<EventRow>(
-        `SELECT ${EVENT_COLUMNS}, sj.status AS sync_status
+        `SELECT ${EVENT_COLUMNS}, sj.status AS sync_status, sj.last_error AS sync_error
            FROM events e
            ${EVENT_JOIN}
            LEFT JOIN sync_jobs sj ON sj.event_id = e.event_id AND sj.destination = 'sheets'
@@ -229,7 +232,11 @@ function createReads(db: Queryable): Omit<Store, 'ping' | 'withTransaction' | 'g
           LIMIT $3`,
         [workspaceId, options.resourceId ?? null, options.limit],
       );
-      return result.rows.map((row) => ({ ...toEvent(row), sync: row.sync_status ?? 'not_configured' }));
+      return result.rows.map((row) => ({
+        ...toEvent(row),
+        sync: row.sync_status ?? 'not_configured',
+        syncError: row.sync_error ?? null,
+      }));
     },
 
     async getEvent(workspaceId, eventId) {
@@ -254,6 +261,32 @@ function createReads(db: Queryable): Omit<Store, 'ping' | 'withTransaction' | 'g
       );
       const [row] = result.rows;
       return row ? toEvent(row) : undefined;
+    },
+
+    async listEventsByIds(workspaceId, eventIds) {
+      const result = await db.query<EventRow>(
+        `SELECT ${EVENT_COLUMNS}
+           FROM events e
+           ${EVENT_JOIN}
+          WHERE e.workspace_id = $1 AND e.event_id = ANY($2::uuid[])
+          ORDER BY e.seq`,
+        [workspaceId, eventIds],
+      );
+      return result.rows.map(toEvent);
+    },
+
+    async getSyncBacklog(workspaceId) {
+      const result = await db.query<{ pending: string; retrying: string; failed: string }>(
+        `SELECT count(*) FILTER (WHERE status IN ('pending', 'in_progress')) AS pending,
+                count(*) FILTER (WHERE status = 'retrying') AS retrying,
+                count(*) FILTER (WHERE status = 'failed') AS failed
+           FROM sync_jobs
+          WHERE workspace_id = $1 AND destination = 'sheets'`,
+        [workspaceId],
+      );
+      // An aggregate query always returns exactly one row.
+      const row = result.rows[0] as { pending: string; retrying: string; failed: string };
+      return { pending: Number(row.pending), retrying: Number(row.retrying), failed: Number(row.failed) };
     },
 
     async findCommandByTokenHash(workspaceId, tokenHash) {
@@ -493,6 +526,25 @@ export function createPgStore(pool: Pool): Store {
           recentEvents: await reads.listEvents(workspaceId, { limit: eventLimit }),
         };
       });
+    },
+
+    async requeueSync(workspaceId, eventId, destination) {
+      const requeued = await pool.query(
+        `UPDATE sync_jobs
+            SET status = 'pending', attempts = 0, next_attempt_at = now(), last_error = NULL, updated_at = now()
+          WHERE workspace_id = $1 AND event_id = $2 AND destination = $3 AND status IN ('failed', 'retrying')
+          RETURNING id`,
+        [workspaceId, eventId, destination],
+      );
+      if (requeued.rows.length > 0) {
+        return { result: 'requeued' };
+      }
+      const current = await pool.query<{ status: SyncStatus }>(
+        'SELECT status FROM sync_jobs WHERE workspace_id = $1 AND event_id = $2 AND destination = $3',
+        [workspaceId, eventId, destination],
+      );
+      const [row] = current.rows;
+      return row ? { result: 'unchanged', status: row.status } : { result: 'missing' };
     },
 
     async ping() {

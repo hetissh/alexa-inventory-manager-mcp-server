@@ -6,7 +6,7 @@ An MCP server that exposes the VoiceOps command/event engine (inventory, equipme
 - Architecture and build plan: [`docs/mcp-server-plan.md`](docs/mcp-server-plan.md)
 - Engineering rules for contributors and AI assistants: [`AGENTS.md`](AGENTS.md)
 
-**Status:** milestone M2 (full operations). Across three demo workspaces (warehouse, cafe, repair shop) Claude can look things up, add or remove stock, change a status, assign a job and undo. Anything risky waits for the user's explicit yes before it is applied. Every change is recorded with before/after values, low stock raises an alert by itself, and a versioned board snapshot is available for a future screen. The Google Sheets sync arrives in M3.
+**Status:** milestone M3 (spreadsheet sync) is built and tested against an in-memory stand-in for the spreadsheet; it has **not yet been run against real Google** (that needs the credentials described in [`docs/google-sheets-setup.md`](docs/google-sheets-setup.md)). Across three demo workspaces (warehouse, cafe, repair shop) Claude can look things up, add or remove stock, change a status, assign a job and undo. Anything risky waits for the user's explicit yes before it is applied. Every change is recorded with before/after values, low stock raises an alert by itself, and a versioned board snapshot is available for a future screen. A background worker copies every change to a Google Sheet (setup in [`docs/google-sheets-setup.md`](docs/google-sheets-setup.md)).
 
 ## Prerequisites
 
@@ -37,6 +37,8 @@ npm run local:gate        # typecheck + lint + tests (>= 90% per-file coverage) 
 | `db:migrate` | apply pending schema migrations |
 | `db:seed` | add anything missing from the demo workspaces; never overwrites live data |
 | `db:reset` | **deletes** the demo workspaces' events, pending changes, alerts and resources and restores the fixtures (local databases only) |
+| `sheets -- <connect\|check\|disconnect> <workspace> [sheet]` | connect a workspace to a Google Sheet (see [`docs/google-sheets-setup.md`](docs/google-sheets-setup.md)) |
+| `worker` | run the spreadsheet sync worker (build first); leave it running |
 | `build`, `typecheck`, `lint`, `test`, `test:coverage`, `local:gate` | the usual |
 
 The tests use their own database, `voiceops_test`, created automatically on the first run. It must have "test" in its name because the tests delete data. Override with `TEST_DATABASE_URL`.
@@ -53,6 +55,9 @@ Environment variables, read by the server process (never commit real values; the
 | `VOICEOPS_ACTOR_ID` | `manager-1` | Who changes are attributed to in the activity log. Only this person can confirm or undo what they asked for. |
 | `LOG_LEVEL` | `info` | `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent`. Logs go to **stderr** only; stdout carries MCP JSON-RPC. |
 | `VOICEOPS_ALLOW_REMOTE_RESET` | unset | Set to `1` to let `db:reset` run against a non-local database. |
+| `GOOGLE_APPLICATION_CREDENTIALS` | unset | Absolute path of the Google service-account key file (**a secret: keep it outside the repo**). Read by the sync worker and the `sheets` command only, never by the MCP server. |
+| `VOICEOPS_SYNC_POLL_MS` | `1000` | How often the sync worker looks for work when idle (100 to 60000). |
+| `VOICEOPS_DEMO_TOOLS` | `false` | `true` registers the demo-only `reset-workspace` tool. Refused unless the database is local. |
 
 For the CLI commands, a `.env` file in `server-ts/` is loaded if present (it is gitignored).
 
@@ -107,6 +112,8 @@ Ask Claude, in a session that has the server connected. The wording does not hav
 
 **Repair shop** (say "in the repair shop"): "Assign job one oh eight to Rahul." Asks, then assigns. "Assign job 110 to Vikram" is refused (he is off duty).
 
+**Spreadsheet** (after setting it up as in [`docs/google-sheets-setup.md`](docs/google-sheets-setup.md) and starting `npm run worker`): "Add twenty air filters." Claude says the spreadsheet update is *pending*; the row appears in the sheet within a few seconds; "show me the recent changes" then reports it as *synced*. Stop the worker, make a change, and `get-workspace` shows it waiting; start the worker and it clears.
+
 Say any change twice with an idempotency key ("using key demo-1") and the second time it reports the request was already applied. Reset the demo data any time with `npm run db:reset`.
 
 ## Tools
@@ -126,8 +133,14 @@ Say any change twice with an idempotency key ("using key demo-1") and the second
 | `undo-last-change` | change | Reverse your most recent change with a compensating event; always asks first |
 | `confirm-command` | change | Apply a waiting change after the user said yes (single-use token, about two minutes, only for the person who asked) |
 | `cancel-command` | change | Discard a waiting change |
+| `retry-sync` | change | Try a failed or retrying spreadsheet update again |
+| `reset-workspace` | demo only | Restore a demo workspace's starting data (only with `VOICEOPS_DEMO_TOOLS=true`, local databases only) |
 
-Every tool takes an optional `workspaceId`; every change tool takes an optional `idempotencyKey`.
+Every tool takes an optional `workspaceId`; every change tool takes an optional `idempotencyKey`. `list-events` and `get-board` show each change's spreadsheet state (`not_configured`, `pending`, `retrying`, `synced`, `failed`) and, when it failed, why.
+
+## Spreadsheet sync
+
+Every committed change queues a job in the same database transaction. A separate **worker process** (`npm run worker`) turns the queued jobs into Google Sheets writes: it rewrites the workspace's **Resources** tab from the database and appends the new rows to the **Activity** tab, retrying with backoff on temporary problems and giving up (visibly) on ones a retry cannot fix. A failing spreadsheet never undoes or blocks a change. Run the worker whenever the MCP server is in use; if it is not running, updates stay *pending* and `get-workspace` shows the backlog. See [`docs/google-sheets-setup.md`](docs/google-sheets-setup.md) for the one-off Google setup, the commands and troubleshooting.
 
 ## Layout
 

@@ -34,3 +34,15 @@ export class WorkspaceNotFoundError extends Error {
     this.name = 'WorkspaceNotFoundError';
   }
 }
+
+/** A spreadsheet call failed. `retryable` says whether trying again later could help. */
+export class SheetsError extends Error {
+  constructor(
+    message: string,
+    readonly retryable: boolean,
+    options?: { readonly cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = 'SheetsError';
+  }
+}

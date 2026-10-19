@@ -36,6 +36,8 @@ async function openServices(): Promise<Services> {
       workspaceId: WORKSPACE_ID,
       workspaceIds: ALL_WORKSPACE_IDS,
       actorId: TEST_ACTOR,
+      syncPollMs: 1000,
+      demoTools: false,
     },
     silentLogger,
   );
@@ -69,6 +71,8 @@ export async function connectInMemory(): Promise<ConnectedPair> {
     actorId: TEST_ACTOR,
     commands: services.commands,
     reads: services.reads,
+    sync: services.sync,
+    demo: services.demo,
   });
   return link(server, services);
 }
@@ -90,6 +94,8 @@ export async function connectWithContext(
     actorId: TEST_ACTOR,
     commands: services.commands,
     reads: services.reads,
+    sync: services.sync,
+    demo: services.demo,
     ...extra,
   });
   return link(server, services);

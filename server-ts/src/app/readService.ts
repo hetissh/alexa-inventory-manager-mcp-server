@@ -9,7 +9,7 @@ import type { Resource, ResourceType } from '../domain/schemas.js';
 import type { AlertRecord, AlertStatus, Workspace, WorkspaceSettings } from '../domain/types.js';
 import { getTemplate } from '../templates/index.js';
 import { WorkspaceNotFoundError } from './errors.js';
-import type { AppLogger, ListedEvent, Store } from './ports.js';
+import type { AppLogger, ListedEvent, Store, SyncBacklog } from './ports.js';
 import {
   spokenAlertList,
   spokenAmbiguous,
@@ -89,6 +89,8 @@ export interface WorkspaceInfo {
   readonly templateLabel: string;
   readonly settings: WorkspaceSettings;
   readonly counts: Readonly<Partial<Record<ResourceType, number>>>;
+  /** Spreadsheet updates waiting, being retried, or given up on. */
+  readonly syncBacklog: SyncBacklog;
   readonly spoken: string;
 }
 
@@ -218,6 +220,7 @@ export function createReadService(
         templateLabel: template.label,
         settings: template.settings,
         counts,
+        syncBacklog: await store.getSyncBacklog(workspaceId),
         spoken: spokenWorkspace(workspace.name, template.label, resources.length),
       };
     },

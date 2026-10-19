@@ -41,6 +41,17 @@ const envSchema = z
     VOICEOPS_ACTOR_ID: actorIdSchema
       .default(DEFAULT_ACTOR_ID)
       .describe('Who changes made through this server are attributed to in the activity log.'),
+    VOICEOPS_SYNC_POLL_MS: z.coerce
+      .number()
+      .int()
+      .min(100)
+      .max(60_000)
+      .default(1_000)
+      .describe('How often the spreadsheet sync worker looks for work when idle, in milliseconds.'),
+    VOICEOPS_DEMO_TOOLS: z
+      .stringbool()
+      .default(false)
+      .describe('Register the demo-only reset-workspace tool (local databases only).'),
   })
   .superRefine((env, context) => {
     if (env.VOICEOPS_WORKSPACES && !env.VOICEOPS_WORKSPACES.includes(env.VOICEOPS_WORKSPACE)) {
@@ -61,6 +72,10 @@ export interface Config {
   /** Every workspace tools may address; anything else is refused. */
   readonly workspaceIds: readonly string[];
   readonly actorId: string;
+  /** How often the sync worker polls for work when idle. */
+  readonly syncPollMs: number;
+  /** Whether the demo-only reset tool is registered. */
+  readonly demoTools: boolean;
 }
 
 /** Parses process environment into typed config; throws a readable error when invalid. */
@@ -77,5 +92,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     workspaceId,
     workspaceIds: [...new Set(listed ?? [workspaceId])],
     actorId: parsed.data.VOICEOPS_ACTOR_ID,
+    syncPollMs: parsed.data.VOICEOPS_SYNC_POLL_MS,
+    demoTools: parsed.data.VOICEOPS_DEMO_TOOLS,
   };
 }

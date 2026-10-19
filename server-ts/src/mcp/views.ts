@@ -43,6 +43,10 @@ export const eventViewSchema = z.object({
   createdAt: z.string().describe('ISO 8601 timestamp.'),
   reversalOf: z.string().nullable().describe('The event this one undid, if it was an undo.'),
   sync: syncStateSchema.describe('Spreadsheet sync state for this event ("not_configured" if no spreadsheet is set up).'),
+  syncError: z
+    .string()
+    .nullable()
+    .describe('Why the spreadsheet update failed or is being retried, if it did. Tell the user; retry-sync tries again.'),
 });
 
 export const alertViewSchema = z.object({
@@ -77,7 +81,7 @@ export function toCandidateView(candidate: Candidate): z.infer<typeof candidateV
   return { ...candidate };
 }
 
-export function toEventView(event: EventRecord, sync: SyncState): EventView {
+export function toEventView(event: EventRecord, sync: SyncState, syncError: string | null = null): EventView {
   return {
     eventId: event.eventId,
     commandId: event.commandId,
@@ -94,6 +98,7 @@ export function toEventView(event: EventRecord, sync: SyncState): EventView {
     createdAt: event.createdAt.toISOString(),
     reversalOf: event.reversalOf,
     sync,
+    syncError,
   };
 }
 
