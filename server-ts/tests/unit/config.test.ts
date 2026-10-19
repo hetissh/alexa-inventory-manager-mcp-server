@@ -12,6 +12,7 @@ describe('loadConfig', () => {
       actorId: 'manager-1',
       syncPollMs: 1000,
       demoTools: false,
+      board: { host: '127.0.0.1', port: 8787, token: undefined, pollMs: 3000 },
     });
   });
 
@@ -33,6 +34,7 @@ describe('loadConfig', () => {
       actorId: 'staff@example.com',
       syncPollMs: 250,
       demoTools: true,
+      board: { host: '127.0.0.1', port: 8787, token: undefined, pollMs: 3000 },
     });
   });
 
@@ -74,6 +76,46 @@ describe('loadConfig', () => {
   ])('throws a readable error for %s', (_label, env, field) => {
     expect(() => loadConfig(env)).toThrow(field);
     expect(() => loadConfig(env)).toThrow(/Invalid configuration/);
+  });
+
+  describe('the live board', () => {
+    const TOKEN = 'a-long-enough-board-token-1234';
+
+    it('reads every board setting from the environment', () => {
+      expect(
+        loadConfig({
+          VOICEOPS_BOARD_HOST: '0.0.0.0',
+          VOICEOPS_BOARD_PORT: '9000',
+          VOICEOPS_BOARD_TOKEN: TOKEN,
+          VOICEOPS_BOARD_POLL_MS: '5000',
+        }).board,
+      ).toEqual({ host: '0.0.0.0', port: 9000, token: TOKEN, pollMs: 5000 });
+    });
+
+    it.each(['localhost', '127.0.0.1', '::1', '[::1]'])('needs no token on the loopback address %s', (host) => {
+      expect(loadConfig({ VOICEOPS_BOARD_HOST: host }).board.token).toBeUndefined();
+    });
+
+    it.each(['0.0.0.0', '192.168.1.20', 'board.example.com'])('refuses to listen on %s without a token', (host) => {
+      expect(() => loadConfig({ VOICEOPS_BOARD_HOST: host })).toThrow(/not a loopback address[\s\S]*VOICEOPS_BOARD_TOKEN/);
+    });
+
+    it.each([
+      ['a port above 65535', { VOICEOPS_BOARD_PORT: '70000' }, /VOICEOPS_BOARD_PORT/],
+      ['a negative port', { VOICEOPS_BOARD_PORT: '-1' }, /VOICEOPS_BOARD_PORT/],
+      ['a port that is not a number', { VOICEOPS_BOARD_PORT: 'http' }, /VOICEOPS_BOARD_PORT/],
+      ['a token that is too short to guess-proof', { VOICEOPS_BOARD_TOKEN: 'short' }, /VOICEOPS_BOARD_TOKEN/],
+      ['a poll interval under a second', { VOICEOPS_BOARD_POLL_MS: '200' }, /VOICEOPS_BOARD_POLL_MS/],
+      ['an empty host', { VOICEOPS_BOARD_HOST: '' }, /VOICEOPS_BOARD_HOST/],
+    ])('rejects %s', (_label, env, message) => {
+      expect(() => loadConfig(env)).toThrow(message);
+    });
+
+    it('never echoes the token in an error', () => {
+      const attempt = (): unknown => loadConfig({ VOICEOPS_BOARD_TOKEN: TOKEN, VOICEOPS_BOARD_PORT: 'nope' });
+      expect(attempt).toThrow(/VOICEOPS_BOARD_PORT/);
+      expect(attempt).not.toThrow(new RegExp(TOKEN));
+    });
   });
 
   it('never echoes a connection string (which may hold a password) in its error', () => {

@@ -5,17 +5,17 @@
 
 ## Current state
 
-_Last updated: 2026-10-19 (M3 built; waiting for Google credentials to verify it live)._
+_Last updated: 2026-10-19 (M4 first slice: live-board web server built and committed locally; M3 still waiting for Google credentials to verify it live)._
 
 | Item | Status |
 | --- | --- |
 | Product | VoiceOps: voice-controlled operations (inventory, equipment, menu items, repair jobs) with an audited event ledger. This repo is the **MCP server** that lets Claude act as the "voice" while Alexa/Fire TV/dashboard come later. Product spec: `voiceops-hackathon-build-plan.md` (outside the repo; summarised in `docs/mcp-server-plan.md`). |
-| Milestone | **M2 complete.** **M3 (Google Sheets) is built and tested against a fake spreadsheet, but NOT yet run against real Google**: it needs the user's Google Cloud project, service account and Sheet (see "Next actions"). It is not marked done until that live check passes. |
-| Git | `main` holds the M0 scaffold commit. Branch `feat/m1-core-loop` (cut from `main`; the name predates M2) holds the M1, M2 and M3 commits (M3 on top) and **is pushed to `origin/feat/m1-core-loop`** (2026-10-19, tracking set). `main` is **not** pushed and nothing is merged into it; `origin/main` does not exist. |
-| Gate | `npm run local:gate` is green: typecheck, lint, 569 tests in 45 files, 99.8 % line coverage with every file at or above the 90 % per-file threshold, build. Needs PostgreSQL running. |
+| Milestone | **M2 complete.** **M3 (Google Sheets) is built and tested against a fake spreadsheet, but NOT yet run against real Google**: it needs the user's Google Cloud project, service account and Sheet (see "Next actions"). It is not marked done until that live check passes. **M4 (hardening) is started:** the read-only live-board web server, its page and the demo script are built and tested; the Streamable HTTP MCP transport with auth is **not started** (waiting on a decision from the user, see "Next actions"). |
+| Git | `main` holds the M0 scaffold commit. Branch `feat/m1-core-loop` (cut from `main`; the name predates M2) holds the M1, M2 and M3 commits plus a docs commit and **is pushed to `origin/feat/m1-core-loop` up to the M3 commit** (2026-10-19); the docs commit `b21b0a3` after it is committed locally but **not pushed**. **The M4 board-server work is committed locally on top of it and not pushed** (push only when the user asks). `main` is **not** pushed and nothing is merged into it; `origin/main` does not exist. |
+| Gate | `npm run local:gate` is green (2026-10-19, with the board server): typecheck, lint, 674 tests in 51 files, 99.85 % statements / 99.39 % branches / 100 % functions with every file at or above the 90 % per-file threshold, build. Needs PostgreSQL running. |
 | Registered with Claude? | **Not by us.** The user plugs the server into Claude themselves (see "Connect it to Claude" in `README.md`). An earlier registration must be updated: add `VOICEOPS_WORKSPACES=northside-warehouse,harbor-cafe,eastside-repairs` to use the cafe and repair demos, restart the client after rebuilding, and run `npm run db:setup` once (the server refuses to start with the schema behind). M3 adds no migration. |
-| What works | 14 tools (15 with demo tools): the 13 from M2 plus `retry-sync` (and the demo-only `reset-workspace`). Three fictional workspaces on one engine. Server-enforced confirmation tokens, undo, low-stock alerts, a versioned board snapshot, an allow-list of workspaces. **Spreadsheet sync:** `npm run sheets -- connect|check|disconnect` and a separate worker process (`npm run worker`) that rewrites the Resources tab and appends the Activity tab, in batches, with locking, backoff, retries and visible failures. Exercised against an in-memory spreadsheet and the real Google client library's "no credentials" path only. |
-| What does not exist yet | Any proof against real Google (credentials needed), HTTP transport and auth, board HTTP endpoint, MCP elicitation, cleanup of old pending changes, back-fill of pre-connection history into Activity. |
+| What works | **Live board:** `npm run board` serves each allowed workspace's board as a page (`/board/<id>`) and JSON (`/workspaces/<id>/board`, ETag = board version) on `127.0.0.1:8787`, read-only, polling, with a stale banner when the server goes away (details: README "Live board", plan §8a). 14 tools (15 with demo tools): the 13 from M2 plus `retry-sync` (and the demo-only `reset-workspace`). Three fictional workspaces on one engine. Server-enforced confirmation tokens, undo, low-stock alerts, a versioned board snapshot, an allow-list of workspaces. **Spreadsheet sync:** `npm run sheets -- connect|check|disconnect` and a separate worker process (`npm run worker`) that rewrites the Resources tab and appends the Activity tab, in batches, with locking, backoff, retries and visible failures. Exercised against an in-memory spreadsheet and the real Google client library's "no credentials" path only. |
+| What does not exist yet | Any proof against real Google (credentials needed), the Streamable HTTP **MCP** transport and its auth (only needed for claude.ai connectors; not started), a Fire TV-specific layout or a push channel (the board polls), MCP elicitation, cleanup of old pending changes, back-fill of pre-connection history into Activity, three rehearsals of the demo script by a person. |
 
 ### How to run and verify
 
@@ -27,6 +27,7 @@ npm run db:setup                      # from repo root: create DB "voiceops", mi
 npm run local:gate                    # from repo root; delegates to server-ts
 node server-ts/dist/bin.js            # after build; speaks MCP on stdio
 npm run worker                        # after build; the spreadsheet sync worker (needs Google credentials, see docs/google-sheets-setup.md)
+VOICEOPS_WORKSPACES=northside-warehouse,harbor-cafe,eastside-repairs npm run board   # after build; the live board on http://127.0.0.1:8787/
 ```
 
 ### Next actions — start here
@@ -37,7 +38,12 @@ The user sets up Google following `docs/google-sheets-setup.md` and gives (none 
    - check (a) a change via Claude shows in Resources and Activity within ~10 s (record the measured time); (b) unshare the sheet or point it at a wrong id: the update goes `failed` with a readable `syncError` in `list-events`, the change itself and the board are unaffected, and after fixing it `retry-sync` turns it `synced`; (c) with the worker stopped, `get-workspace` shows the backlog, and starting the worker clears it; (d) look up the real Sheets API quotas in the Cloud console and note them here (the docs site was blocked from the build environment);
    - record the results in the log below and mark M3 done. If key creation is blocked by org policy, `gcloud auth application-default login` works with no code change.
 
-**2. M4 (hardening)**, once M3 is verified: Streamable HTTP transport with auth (bearer/OAuth, `Origin` validation, bind to localhost, token → actor and workspace) for claude.ai connectors and a future dashboard; a read-only board endpoint (`GET /workspaces/{id}/board`, the `get-board` contract) for the Fire TV; a scripted demo prompt and three clean consecutive rehearsals (`reset-workspace` exists for this); optional MCP elicitation as a second approval route; clean-up of expired pending changes; tidy the branch (rename `feat/m1-core-loop`, merge to `main`). Later: the Alexa adapter calling the same `CommandService`.
+**2. Rest of M4 (hardening).** Built: the live-board web server, its page and `docs/demo-script.md` (see the 2026-10-19 M4 log entry). Still open:
+   - **Streamable HTTP MCP transport with auth** (bearer/OAuth, `Origin` validation, bind to localhost, token → actor and workspace). It is only needed if the user wants **claude.ai connectors** (which need public HTTPS and OAuth) or a dashboard that calls tools; Claude Desktop and Claude Code work over stdio today. **Ask the user whether they want it before building it.**
+   - Three clean consecutive rehearsals of `docs/demo-script.md` by a person (tick the checklist there); note any failing step in a log entry.
+   - Optional MCP elicitation as a second approval route; clean-up of expired pending changes.
+   - Tidy the branch: rename `feat/m1-core-loop` and merge to `main` only when the user says so; push `b21b0a3` and the M4 commit only when asked.
+   - Later: the Alexa adapter calling the same `CommandService`; a Fire TV layout for the board (the page and JSON contract are the starting point).
 
 ### Decisions and assumptions in force
 
@@ -88,6 +94,15 @@ Decisions made during M3 (not asked of the user; revisit if they disagree):
 34. **Demo tool `reset-workspace`** exists only with `VOICEOPS_DEMO_TOOLS=true` *and* a local database (checked before connecting), requires an explicit `confirm: true`, is flagged `destructiveHint`, and only resets demo workspaces on the allow-list.
 35. `list-events` and `get-board` show `syncError`; `get-workspace` shows the sync backlog (pending / retrying / failed), so a worker that is not running is visible.
 
+Decisions made during M4 (not asked of the user; revisit if they disagree):
+
+36. **The board is its own process** (`npm run board`), not part of the stdio MCP server, for the same reason as the worker: the MCP server's lifetime belongs to the Claude client. It reuses `createServices`, so it reads exactly what `get-board` reads.
+37. **Read-only, same allow-list.** GET/HEAD only; serves only `VOICEOPS_WORKSPACES`; the response (`http/boardResponse.ts`) is a deliberately smaller DTO than the MCP view: no actors, no command or event ids, no operation or source.
+38. **Safe by default, explicit to widen.** Binds to `127.0.0.1`; on a loopback bind the `Host` header must be `localhost`, `127.0.0.1` or `[::1]` (DNS-rebinding defence, `hostAllowList`); any other `VOICEOPS_BOARD_HOST` makes `VOICEOPS_BOARD_TOKEN` mandatory (config refuses to start). The token is compared in constant time on SHA-256 digests; the page takes it from the URL **fragment** (`#token=…`), so it is never sent to a server or logged. The page, script and stylesheet carry no data and need no token.
+39. **Polling with ETags, not SSE or websockets:** the board version is the ETag, a poll costs one tiny `304`, and it works on any browser including a TV's. Revisit if a push channel is wanted.
+40. **The page script is plain ES2017 with no framework, no inline script, and `textContent` only** (a CSP forbids anything else); a static test fails the build if `innerHTML`/`eval`/arrow functions etc. appear in it. It keeps the last good board on failure and shows an amber "Offline: showing the last update from …" banner.
+41. **Streamable HTTP MCP transport deferred** until the user confirms they want claude.ai connectors; it is a different, larger security surface (OAuth, public HTTPS) than the board.
+
 ### Gotchas
 
 - **Node version:** default shell Node is v18.18.2. Anything run with it will fail (vitest 5 needs Node ≥ 22.12; the `db:*` scripts use `--env-file-if-exists`). MCP clients do not load nvm, so register the server with an **absolute** Node path, e.g. `/opt/homebrew/opt/node@24/bin/node` (v24.3.0), never a bare `node`.
@@ -101,7 +116,11 @@ Decisions made during M3 (not asked of the user; revisit if they disagree):
 - **A key file path needs a `.env` the user creates** (`server-ts/.env`, loaded by `npm run worker` / `npm run sheets` via `--env-file-if-exists`); an AI cannot write `.env*` here. The key itself must never be pasted anywhere or read by an assistant.
 - **Worker tests need a clock ahead of the database's:** jobs are stamped with the database's `now()`, so `realClock()` in `tests/helpers/sync.ts` starts a minute ahead of real time.
 - **vitest 5 mocks used with `new`** must be function expressions, not arrows (see `tests/unit/googleClient.test.ts`).
-- **Not covered by tests (documented):** the `ROLLBACK`/rethrow path at the end of `infra/db/seed.ts` (lines 56–57), and one branch in `pgStore.ts` (a unique violation on an unrelated constraint). Both files stay above the threshold.
+- **Not covered by tests (documented):** the `ROLLBACK`/rethrow path at the end of `infra/db/seed.ts` (lines 56–57), one branch in `pgStore.ts` (a unique violation on an unrelated constraint), and a few defensive branches in `http/boardServer.ts` (fallbacks for a missing method, URL or Host header, which Node always supplies for server requests, and an `undefined` check kept only to narrow a type). All files stay above the threshold.
+- **The board needs the allow-list too:** `npm run board` serves only `VOICEOPS_WORKSPACES` (default: just `VOICEOPS_WORKSPACE`), so name all three workspaces to see the cafe and repair boards; otherwise their URLs say 404. There is no `.env.example` (an AI cannot create `.env*` files here); the user creates `server-ts/.env` if they want these set permanently.
+- **Board page tests run the browser script in `node:vm` with a tiny fake DOM** (`tests/unit/boardPage.test.ts`), not a real browser. The page was also looked at in the in-app browser (below), but there is no automated browser test.
+- **Tests that need a Host header or a method `fetch` will not send** use `tests/helpers/http.ts` (`node:http`, one connection per request).
+- **`cd` in a shell call persists** (it moved the working directory to `server-ts/` twice during M4): use absolute paths or `git -C`/`npm --prefix`, never `cd`. BSD `sed -i` needs a suffix argument on macOS; prefer the edit tool or Python for in-place edits.
 - **Single-member unions:** `OPERATION_NAMES` is now four long, but `ALERT_RULES` has one member, so `src/domain/board.ts` carries a justified `eslint-disable` for `no-unnecessary-condition`; remove it when a second rule exists.
 - **TypeScript is pinned `~6.0.3`** because `typescript-eslint@8.71` declares peer `typescript <6.1.0`. TypeScript 7.x is "latest" on npm; revisit when typescript-eslint supports it.
 - **Dependency versions were looked up on 2026-10-18** (MCP SDK 1.32.1, zod 4.6.7, vitest 5.0.5, eslint 10.13, pino 10.4, pg 8.23.1). The SDK is v1.x (`McpServer.registerTool`, zod raw shapes); re-check the SDK major before upgrading.
@@ -117,9 +136,31 @@ Decisions made during M3 (not asked of the user; revisit if they disagree):
 | M1 Core loop | Postgres, `adjust-quantity` end to end, warehouse fixture, read tools | **Done** 2026-10-19 |
 | M2 Full operations | `set-status`, `assign-job`, confirmation tokens, disambiguation, café/repair templates, alerts, board, undo, workspace allow-list | **Done** 2026-10-19 |
 | M3 Sheets | Outbox worker, retries, sync status, `retry-sync` | **Built 2026-10-19; live verification against real Google pending** (needs the user's credentials) |
-| M4 Hardening | Streamable HTTP + auth, board endpoint, rehearsal (demo reset tool already exists) | Not started |
+| M4 Hardening | Streamable HTTP + auth, board endpoint, rehearsal (demo reset tool already exists) | **Started 2026-10-19:** board server and page built and tested, demo script written; Streamable HTTP + auth not started (needs the user's decision); three rehearsals pending |
 
 ## Log (newest first)
+
+### 2026-10-19 — M4 (first slice): live-board web server, page and demo script
+
+**Done**
+- **Board server** (`server-ts/src/http/`): `boardServer.ts` (node:http routes: `/workspaces/{id}/board` JSON with ETag/304, `/board/{id}` page, `/board/assets/board.{js,css}`, `/health`, `/` redirect, `/favicon.ico`; GET/HEAD only; Host allow-list on loopback binds; optional bearer token; CSP and other security headers; generic error bodies; request logging without query strings), `boardResponse.ts` (the smaller DTO), `boardPage.ts` (HTML shell, dark high-contrast CSS, ES2017 script), `main.ts` (`startBoardServer`: config, services, listen, graceful SIGINT/SIGTERM shutdown), `bin.ts` (process entry).
+- `src/loopback.ts` (shared loopback check). **Config:** `VOICEOPS_BOARD_HOST` / `_PORT` / `_TOKEN` / `_POLL_MS`; a non-loopback host requires a token. Logger redacts `boardToken`. ESLint: `src/http` may not import `infra`, `mcp`, `pg` or the MCP SDK. npm scripts `board` and `board:dev` (also at the repo root).
+- **Docs:** `docs/demo-script.md` (new), README ("Live board", env vars, `board` command, layout), `docs/mcp-server-plan.md` (§8a, layout, §10 progress, §12), this file.
+
+**Verified (actually run)**
+- `npm run local:gate` green: typecheck, lint, **674 tests in 51 files** (105 new), 99.85 % statements / 99.39 % branches / 100 % functions, every file ≥ 90 %, build.
+- New tests: the page script in a fake DOM (first render, 304, redraw, sections hiding, stale banner and recovery, 401/404/500/network error messages, token from the fragment and never in the URL, hostile text rendered as text, no `innerHTML`/`eval`/modern syntax, no inline script in the shell); the response mapper (shape, ISO dates, nothing about who or how); the server against real PostgreSQL over real HTTP (JSON, ETag/304/`*`, HEAD, 405 with `Allow`, allow-list, unknown workspace, bad ids, 503 and 500 with generic bodies, token cases including wrong length and wrong scheme, token checked before existence, Host check including spoofed names, `/` redirect, CSP and security headers, 404/400/204, query strings kept out of logs, a reply that cannot be sent is logged and the server stays up); the process (serves and stops on SIGTERM and releases the port, loopback Host check, token flag and no token in logs, allow-list, double stop, port in use, bad config, no token on a network bind, unreachable database, schema behind); the entry point (exit 0 / 1); config rules.
+- Looked at by hand in the in-app browser against the dev database: the warehouse board (alert banner, highlighted low-stock row, maintenance chip), the cafe (struck-through sold-out item), the repair shop (assignees); each page updated within about 3 s of a change; after Ctrl-C of the server the page kept its last board and showed the amber offline banner. The dev database was reset afterwards.
+- **Not verified:** a real Fire TV or other TV browser (only the ES2017/no-framework constraint and the in-app browser), a network-wide bind with a token from a second device, the board under load or over hours, the demo script run end to end by a person (the three rehearsals), the Streamable HTTP MCP transport (not built).
+
+**Decisions / findings**
+- See decisions 36–41. The new tests passed against the server without product fixes; the failures along the way were mistakes in the tests themselves (a wrong fixture expectation, a substring check that matched "resources" for "source", a wrong expected title, lint rules on mocks). One product change came out of testing: the Host allow-list rule was extracted into `hostAllowList()` so it can be tested without binding a network-wide port (which would also trigger macOS's firewall prompt).
+- A favicon route (`204`) and a guard that turns an unparseable request target into `400` were added (browsers always ask for `/favicon.ico`; an unparseable target such as `//` would otherwise end as a `500`); both are tested.
+
+**Next actions**
+1. Ask the user whether they want the Streamable HTTP MCP transport with auth (claude.ai connectors) before building it.
+2. Push `feat/m1-core-loop` (the docs commit and this slice are local only) only when the user asks.
+3. M3 live verification when Google credentials arrive; then the three rehearsals.
 
 ### 2026-10-19 — M3: spreadsheet sync (built; live verification pending)
 

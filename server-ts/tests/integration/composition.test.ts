@@ -21,6 +21,7 @@ const config = (overrides: Partial<Config> = {}): Config => ({
   actorId: 'manager-1',
   syncPollMs: 1000,
   demoTools: false,
+  board: { host: '127.0.0.1', port: 8787, token: undefined, pollMs: 3000 },
   ...overrides,
 });
 

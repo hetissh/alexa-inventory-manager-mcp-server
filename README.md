@@ -6,7 +6,7 @@ An MCP server that exposes the VoiceOps command/event engine (inventory, equipme
 - Architecture and build plan: [`docs/mcp-server-plan.md`](docs/mcp-server-plan.md)
 - Engineering rules for contributors and AI assistants: [`AGENTS.md`](AGENTS.md)
 
-**Status:** milestone M3 (spreadsheet sync) is built and tested against an in-memory stand-in for the spreadsheet; it has **not yet been run against real Google** (that needs the credentials described in [`docs/google-sheets-setup.md`](docs/google-sheets-setup.md)). Across three demo workspaces (warehouse, cafe, repair shop) Claude can look things up, add or remove stock, change a status, assign a job and undo. Anything risky waits for the user's explicit yes before it is applied. Every change is recorded with before/after values, low stock raises an alert by itself, and a versioned board snapshot is available for a future screen. A background worker copies every change to a Google Sheet (setup in [`docs/google-sheets-setup.md`](docs/google-sheets-setup.md)).
+**Status:** milestone M3 (spreadsheet sync) is built and tested against an in-memory stand-in for the spreadsheet; it has **not yet been run against real Google** (that needs the credentials described in [`docs/google-sheets-setup.md`](docs/google-sheets-setup.md)). Across three demo workspaces (warehouse, cafe, repair shop) Claude can look things up, add or remove stock, change a status, assign a job and undo. Anything risky waits for the user's explicit yes before it is applied. Every change is recorded with before/after values, low stock raises an alert by itself, and a versioned board snapshot is available for a future screen. A background worker copies every change to a Google Sheet (setup in [`docs/google-sheets-setup.md`](docs/google-sheets-setup.md)). A small web server (`npm run board`) shows each workspace's live board in a browser, ready for a wall screen or the Fire TV (see [Live board](#live-board)). A scripted run for showing it all is in [`docs/demo-script.md`](docs/demo-script.md).
 
 ## Prerequisites
 
@@ -39,6 +39,7 @@ npm run local:gate        # typecheck + lint + tests (>= 90% per-file coverage) 
 | `db:reset` | **deletes** the demo workspaces' events, pending changes, alerts and resources and restores the fixtures (local databases only) |
 | `sheets -- <connect\|check\|disconnect> <workspace> [sheet]` | connect a workspace to a Google Sheet (see [`docs/google-sheets-setup.md`](docs/google-sheets-setup.md)) |
 | `worker` | run the spreadsheet sync worker (build first); leave it running |
+| `board` | run the live-board web server (build first); leave it running. See [Live board](#live-board) |
 | `build`, `typecheck`, `lint`, `test`, `test:coverage`, `local:gate` | the usual |
 
 The tests use their own database, `voiceops_test`, created automatically on the first run. It must have "test" in its name because the tests delete data. Override with `TEST_DATABASE_URL`.
@@ -58,6 +59,10 @@ Environment variables, read by the server process (never commit real values; the
 | `GOOGLE_APPLICATION_CREDENTIALS` | unset | Absolute path of the Google service-account key file (**a secret: keep it outside the repo**). Read by the sync worker and the `sheets` command only, never by the MCP server. |
 | `VOICEOPS_SYNC_POLL_MS` | `1000` | How often the sync worker looks for work when idle (100 to 60000). |
 | `VOICEOPS_DEMO_TOOLS` | `false` | `true` registers the demo-only `reset-workspace` tool. Refused unless the database is local. |
+| `VOICEOPS_BOARD_HOST` | `127.0.0.1` | Address the live-board server listens on. The default is reachable from this computer only. Any other address needs `VOICEOPS_BOARD_TOKEN`. |
+| `VOICEOPS_BOARD_PORT` | `8787` | Port of the live-board server (`0` picks a free one). |
+| `VOICEOPS_BOARD_TOKEN` | unset | Bearer token (24 to 200 characters) the board's data endpoint requires (**a secret**: keep it out of the repo and logs). Optional on loopback, required otherwise. |
+| `VOICEOPS_BOARD_POLL_MS` | `3000` | How often a board page asks for updates (1000 to 60000). |
 
 For the CLI commands, a `.env` file in `server-ts/` is loaded if present (it is gitignored).
 
@@ -142,13 +147,37 @@ Every tool takes an optional `workspaceId`; every change tool takes an optional 
 
 Every committed change queues a job in the same database transaction. A separate **worker process** (`npm run worker`) turns the queued jobs into Google Sheets writes: it rewrites the workspace's **Resources** tab from the database and appends the new rows to the **Activity** tab, retrying with backoff on temporary problems and giving up (visibly) on ones a retry cannot fix. A failing spreadsheet never undoes or blocks a change. Run the worker whenever the MCP server is in use; if it is not running, updates stay *pending* and `get-workspace` shows the backlog. See [`docs/google-sheets-setup.md`](docs/google-sheets-setup.md) for the one-off Google setup, the commands and troubleshooting.
 
+## Live board
+
+`npm run board` starts a small, read-only web server that shows a workspace's board in any browser: big type, headline numbers, open alerts, every item with its quantity or status, and the latest changes. It is the first version of the screen the Fire TV will show, and it uses the same data as the `get-board` tool. Build first, make sure PostgreSQL is running, then:
+
+```bash
+VOICEOPS_WORKSPACES=northside-warehouse,harbor-cafe,eastside-repairs npm run board
+```
+
+| Address | What it is |
+| --- | --- |
+| `http://127.0.0.1:8787/` | the default workspace's board (`VOICEOPS_WORKSPACE`) |
+| `http://127.0.0.1:8787/board/<workspace>` | one workspace's board page |
+| `http://127.0.0.1:8787/workspaces/<workspace>/board` | the same data as JSON, with an `ETag` (the board version) so a screen can ask "anything new?" and get a `304` |
+| `http://127.0.0.1:8787/health` | `200` when the database answers, `503` otherwise |
+
+The page asks for updates every few seconds (`VOICEOPS_BOARD_POLL_MS`) and redraws only when something changed. If the server stops, it keeps showing the last board with an amber "Offline" banner and recovers by itself.
+
+Safety, since a board may be on a wall anyone can see:
+
+- It only reads. Every method except GET and HEAD is refused, and it can change nothing.
+- It serves only the workspaces on the `VOICEOPS_WORKSPACES` allow-list, and it does not send who made a change, command or event ids, or how a change was made.
+- By default it listens on this computer only and answers only to `localhost`, `127.0.0.1` and `[::1]` (so a web page on another site cannot reach it through a rebound DNS name).
+- To show it on another device, set `VOICEOPS_BOARD_HOST=0.0.0.0` **and** `VOICEOPS_BOARD_TOKEN` (the server refuses to start without one). The page and its script carry no data and need no token; the JSON endpoint requires `Authorization: Bearer <token>`. In a browser, put the token in the address after a `#`, which the browser never sends to any server, for example `http://<computer>:8787/board/harbor-cafe#token=<token>`. Use it on a trusted network only: this is plain HTTP, so put a TLS proxy in front of it for anything wider.
+
 ## Layout
 
 ```text
 AGENTS.md  CHANGELOG.md  CLAUDE.md  README.md  package.json (delegates to server-ts)
-docs/mcp-server-plan.md
+docs/mcp-server-plan.md  docs/google-sheets-setup.md  docs/demo-script.md
 server-ts/        TypeScript MCP server (src/, tests/)
 service-py/       reserved by AGENTS.md for data/AI workloads; not created yet
 ```
 
-Inside `server-ts/src`: `domain/` (pure rules and operations), `templates/` (the three demo workspaces), `app/` (command and read services, ports), `infra/` (PostgreSQL), `mcp/` (tools). ESLint enforces the dependency direction.
+Inside `server-ts/src`: `domain/` (pure rules and operations), `templates/` (the three demo workspaces), `app/` (command and read services, ports), `infra/` (PostgreSQL, Google Sheets), `mcp/` (tools), `http/` (the live-board web server), `worker/` (spreadsheet sync process). ESLint enforces the dependency direction.

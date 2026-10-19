@@ -14,6 +14,7 @@
     "db:reset": "npm --prefix server-ts run db:reset",
     "sheets": "npm --prefix server-ts run sheets --",
     "worker": "npm --prefix server-ts run worker",
+    "board": "npm --prefix server-ts run board",
     "local:gate": "npm --prefix server-ts run local:gate"
   }
 }

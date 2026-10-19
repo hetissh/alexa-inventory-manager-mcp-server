@@ -45,6 +45,7 @@ export default defineConfig(
   layer('src/app', ['**/infra/**', '**/mcp/**', 'pg', '@modelcontextprotocol/*'], 'app depends on domain and templates only; talk to the database through ports'),
   layer('src/infra', ['**/mcp/**', '@modelcontextprotocol/*'], 'infra must not depend on the MCP adapter'),
   layer('src/mcp', ['**/infra/**', 'pg'], 'the MCP adapter calls app services; it must not reach into infra'),
+  layer('src/http', ['**/infra/**', '**/mcp/**', 'pg', '@modelcontextprotocol/*'], 'the HTTP adapter calls app services; it must not reach into infra or the MCP adapter'),
   {
     // Plain JS config files are not part of the TypeScript project.
     files: ['**/*.js'],

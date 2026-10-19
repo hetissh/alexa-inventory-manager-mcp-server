@@ -13,6 +13,7 @@ const REDACTED_KEYS = [
   'secret',
   'databaseUrl',
   'connectionString',
+  'boardToken',
 ];
 
 /** Synchronous stderr destination: stdout is reserved for MCP JSON-RPC traffic. */

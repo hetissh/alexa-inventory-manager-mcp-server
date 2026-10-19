@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { actorIdSchema, workspaceIdSchema } from './domain/schemas.js';
+import { isLoopbackHost } from './loopback.js';
 
 const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent'] as const;
 
@@ -52,8 +53,41 @@ const envSchema = z
       .stringbool()
       .default(false)
       .describe('Register the demo-only reset-workspace tool (local databases only).'),
+    VOICEOPS_BOARD_HOST: z
+      .string()
+      .min(1)
+      .max(253)
+      .default('127.0.0.1')
+      .describe('Address the live-board web server listens on. The default is reachable from this computer only.'),
+    VOICEOPS_BOARD_PORT: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(65_535)
+      .default(8_787)
+      .describe('Port the live-board web server listens on (0 picks a free one).'),
+    VOICEOPS_BOARD_TOKEN: z
+      .string()
+      .min(24)
+      .max(200)
+      .optional()
+      .describe('Bearer token the board API requires. A secret: never log it. Required unless the host is loopback.'),
+    VOICEOPS_BOARD_POLL_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(60_000)
+      .default(3_000)
+      .describe('How often a board page asks for updates, in milliseconds.'),
   })
   .superRefine((env, context) => {
+    if (!isLoopbackHost(env.VOICEOPS_BOARD_HOST) && env.VOICEOPS_BOARD_TOKEN === undefined) {
+      context.addIssue({
+        code: 'custom',
+        path: ['VOICEOPS_BOARD_TOKEN'],
+        message: 'is required when VOICEOPS_BOARD_HOST is not a loopback address (the board would be open to the network)',
+      });
+    }
     if (env.VOICEOPS_WORKSPACES && !env.VOICEOPS_WORKSPACES.includes(env.VOICEOPS_WORKSPACE)) {
       context.addIssue({
         code: 'custom',
@@ -76,6 +110,14 @@ export interface Config {
   readonly syncPollMs: number;
   /** Whether the demo-only reset tool is registered. */
   readonly demoTools: boolean;
+  /** The live-board web server. */
+  readonly board: {
+    readonly host: string;
+    readonly port: number;
+    /** A secret: never log it. Undefined means no token is required (only allowed on loopback). */
+    readonly token: string | undefined;
+    readonly pollMs: number;
+  };
 }
 
 /** Parses process environment into typed config; throws a readable error when invalid. */
@@ -94,5 +136,11 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     actorId: parsed.data.VOICEOPS_ACTOR_ID,
     syncPollMs: parsed.data.VOICEOPS_SYNC_POLL_MS,
     demoTools: parsed.data.VOICEOPS_DEMO_TOOLS,
+    board: {
+      host: parsed.data.VOICEOPS_BOARD_HOST,
+      port: parsed.data.VOICEOPS_BOARD_PORT,
+      token: parsed.data.VOICEOPS_BOARD_TOKEN,
+      pollMs: parsed.data.VOICEOPS_BOARD_POLL_MS,
+    },
   };
 }

@@ -48,7 +48,7 @@ Claude Desktop / Code                later: Alexa Lambda · Dashboard · Fire TV
 
 **Operation registry.** Each operation is one file with five parts: an args schema, `validate(resource, args, config)`, `needsConfirmation(...)`, `apply(...)` and `readback(...)`. Adding an operation means adding a file. The café, warehouse and repair-shop templates are data only (types, allowed statuses, thresholds, board layout).
 
-**Layout** (as built through M3; `[M4]` marks what is still to come). Import direction is enforced by ESLint (`domain ← templates ← app ← {infra, mcp}`); only `main.ts`, `composition.ts` and `cli/` wire layers together.
+**Layout** (as built through M4's board server; `[M4]` marks what is still to come). Import direction is enforced by ESLint (`domain ← templates ← app ← {infra, mcp, http}`); only `main.ts`, `composition.ts`, `worker/`, `http/main.ts` and `cli/` wire layers together.
 
 ```text
 /
@@ -69,6 +69,8 @@ Claude Desktop / Code                later: Alexa Lambda · Dashboard · Fire TV
       infra/      db/{pool,migrator,admin,pgStore,pgSyncQueue,integrations,seed}.ts  db/migrations/*
                   sheets/{googleGateway,googleClient}.ts
       worker/     main.ts  bin.ts   (the spreadsheet sync process)
+      http/       boardServer.ts  boardResponse.ts  boardPage.ts  main.ts  bin.ts   (the live-board web server process, §8a)
+      loopback.ts (shared check for loopback addresses; used by config and http)
       cli/        db.ts dbBin.ts (create | migrate | seed | reset | setup)   sheets.ts sheetsBin.ts (connect | check | disconnect)
     tests/        unit/  integration/ (real PostgreSQL)  e2e/ (spawned stdio process)  helpers/
   service-py/     reserved — not created yet
@@ -195,12 +197,26 @@ As built in M1 (thresholds in `domain/matcher.ts`):
 | Prompt injection via resource names or aliases in tool output | Validate and cap name/alias charset and length. Return them as JSON fields. Server instructions say to treat them as data. |
 | Model skips confirmation | Server-enforced tokens, `expectedVersion` re-checked at commit. |
 | Cross-workspace access | `workspace_id` in every query. A test asserts another workspace's resource returns `not_found`. |
-| HTTP transport exposure | Bind to localhost, validate `Origin`, require bearer/OAuth auth, map token to actor and workspace. stdio uses a single configured actor. |
+| HTTP transport exposure | Bind to localhost, validate `Origin`, require bearer/OAuth auth, map token to actor and workspace. stdio uses a single configured actor. **Not built:** this applies to the MCP-over-HTTP transport, which is still deferred. The read-only board server (§8a) has its own, smaller controls. |
 | Secrets | `.env` and a secret manager only; never committed or logged. |
 | Logging | pino to **stderr** only (stdout is the stdio protocol channel), command ID per request, no PII. |
 | Client confidentiality | Fixtures use fictional data only. |
 
 Verify licences of all dependencies with a licence checker before anything ships to a client.
+
+## 8a. Live board server (built in M4)
+
+A second, separate process (`npm run board`, `server-ts/src/http/`) serves each workspace's board over HTTP for a browser or the Fire TV. It is separate for the same reason as the sync worker: the MCP server's lifetime belongs to the Claude client. It calls `ReadService.getBoard` through `createServices`, the same data as the `get-board` tool, and imports nothing from `infra/` or `mcp/` (ESLint rule).
+
+| Route | Behaviour |
+| --- | --- |
+| `GET /workspaces/{id}/board` | JSON (`toBoardResponse`), `ETag: "<board version>"`, `304` for `If-None-Match`; `401` without a valid bearer token when one is configured; `400` bad id; `404` unknown or not allowed; `503` with a generic body when the read fails |
+| `GET /board/{id}` | the page (HTML) with a CSP allowing only its own script and stylesheet; no inline script |
+| `GET /board/assets/board.js`, `board.css` | the page's assets; no data, no token needed |
+| `GET /health` | `200` ok / `503` degraded; no token needed |
+| `GET /` | `302` to the default workspace's page |
+
+Controls: GET and HEAD only (everything else `405`); allow-list of workspaces (`VOICEOPS_WORKSPACES`); the response omits actors, command and event ids and how a change was made; bound to `127.0.0.1` by default, and when bound to a loopback address the `Host` header must be `localhost`, `127.0.0.1` or `[::1]` (DNS-rebinding defence); any other bind address requires `VOICEOPS_BOARD_TOKEN` (config refuses to start otherwise); the token is compared in constant time on SHA-256 digests, is carried by the page in the URL **fragment** (never sent to any server, never logged), and the logger redacts `boardToken`; request logs omit query strings; the page writes server text with `textContent` only. The page polls (`VOICEOPS_BOARD_POLL_MS`), keeps the last good board when the server is unreachable and says so. Server-sent events and a Fire TV-specific layout are possible later changes; the JSON contract above is what a TV would call.
 
 ## 9. Testing
 
@@ -231,6 +247,7 @@ Effort figures are rough ranges for one engineer comfortable with TypeScript. Th
 | **M2** Full operations | `set-status`, `assign-job`, confirmation flow, disambiguation, café and repair templates, low-stock alert, `get-board`, `undo-last-change` | All voice-equivalent scenarios pass in Claude, §13 tests green | 1–1.5 days |
 | **M3** Sheets | Worker, row mapping, retries, sync status in results, `retry-sync` | A Claude command changes the DB and the Sheet within about 10 s; a forced Sheet failure shows `retrying` | ~1 day |
 | **M4** Hardening | Streamable HTTP with auth, optional read-only board endpoint for the TV, `reset-workspace`, scripted demo prompt, 3 clean consecutive runs | Demo passes 3 times without manual DB edits | ~1 day |
+|  | *Progress:* board endpoint and page built (§8a); demo script written ([`demo-script.md`](demo-script.md)); `reset-workspace` built in M3. **Still open:** Streamable HTTP transport with auth (needs a decision, see §12), three rehearsals by a person, clean-up of expired pending changes. | | |
 | **Later** | Alexa Lambda calling the same `CommandService` through the engine API | n/a | n/a |
 
 ## 11. Deviations from the product-level plan
@@ -244,7 +261,7 @@ Effort figures are rough ranges for one engineer comfortable with TypeScript. Th
 Defaults below are being used until confirmed; each is also tracked in `CHANGELOG.md`.
 
 1. Stack: TypeScript + Postgres core (Python reserved in `AGENTS.md` for future data/AI work). *Default in use.*
-2. Claude clients under test: Claude Desktop and Claude Code over stdio. claude.ai connectors would pull remote HTTPS + OAuth forward into M1.
+2. Claude clients under test: Claude Desktop and Claude Code over stdio. claude.ai connectors would pull remote HTTPS + OAuth forward (an MCP-over-HTTP endpoint with authentication, reachable from the internet). **Not built; asked of the user.**
 3. Low-stock alert: opens at `quantity < reorderLevel`, auto-resolves on restock.
 4. Large-adjust confirm threshold: template-configurable, default 100 units.
 5. Zero-crossing rule: below zero is rejected, reaching zero requires confirmation.

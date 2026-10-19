@@ -38,6 +38,7 @@ async function openServices(): Promise<Services> {
       actorId: TEST_ACTOR,
       syncPollMs: 1000,
       demoTools: false,
+      board: { host: '127.0.0.1', port: 8787, token: undefined, pollMs: 3000 },
     },
     silentLogger,
   );
