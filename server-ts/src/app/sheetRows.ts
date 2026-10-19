@@ -44,6 +44,10 @@ export function resourceRow(resource: Resource, names: ReadonlyMap<string, strin
       const { price, currency, status } = resource.attributes;
       return [...head, '', '', spaced(status), '', updatedAt, `${String(price)} ${currency}`];
     }
+    case 'dining_table': {
+      const { status, seats } = resource.attributes;
+      return [...head, '', '', spaced(status), '', updatedAt, `seats ${String(seats)}`];
+    }
     case 'job': {
       const { status, assigneeId, description } = resource.attributes;
       const assignee = assigneeId === null ? '' : (names.get(assigneeId) ?? assigneeId);

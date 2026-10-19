@@ -1,4 +1,4 @@
-import type { Resource, ResourceType } from '../domain/schemas.js';
+import type { Collection, Resource, ResourceType } from '../domain/schemas.js';
 import type {
   AlertRecord,
   AlertRule,
@@ -119,8 +119,13 @@ export interface TransactionStore {
   resolveAlerts(workspaceId: string, resourceId: string, rule: AlertRule, eventId: string): Promise<AlertRecord[]>;
 }
 
+/** A collection with how many resources it currently holds. */
+export type CollectionSummary = Collection & { readonly itemCount: number };
+
 export interface Store {
   getWorkspace(workspaceId: string): Promise<Workspace | undefined>;
+  /** The workspace's named lists in display order. */
+  listCollections(workspaceId: string): Promise<CollectionSummary[]>;
   listResources(workspaceId: string, filter?: { readonly types?: readonly ResourceType[] }): Promise<Resource[]>;
   /** Newest first. */
   listEvents(workspaceId: string, options: { readonly limit: number; readonly resourceId?: string }): Promise<ListedEvent[]>;

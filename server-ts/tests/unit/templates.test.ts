@@ -27,10 +27,23 @@ describe('templates', () => {
         if (resource.type === 'menu_item') {
           expect(template.settings.menuItemStatuses).toContain(resource.attributes.status);
         }
+        if (resource.type === 'dining_table') {
+          expect(template.settings.tableStatuses).toContain(resource.attributes.status);
+        }
         if (resource.type === 'job' && resource.attributes.assigneeId !== null) {
           const assignee = template.resources.find((candidate) => candidate.id === resource.attributes.assigneeId);
           expect(assignee?.type).toBe('technician');
         }
+      }
+      // Every resource lives in a collection the template defines, and that collection holds its kind.
+      const keys = template.collections.map((collection) => collection.key);
+      expect(new Set(keys).size).toBe(keys.length);
+      for (const resource of template.resources) {
+        const collection = template.collections.find((candidate) => candidate.key === resource.collection);
+        expect(collection?.kind, `${resource.id} in ${resource.collection}`).toBe(resource.type);
+      }
+      for (const collection of template.collections) {
+        expect(template.resources.some((resource) => resource.collection === collection.key), collection.key).toBe(true);
       }
       expect(template.settings.largeAdjustThreshold).toBeLessThan(template.settings.maxAdjustment);
       expect(template.board.metrics.length).toBeGreaterThan(0);
@@ -42,7 +55,7 @@ describe('templates', () => {
 
   it('every status alias points at a status that exists somewhere', () => {
     const { settings } = getTemplate('warehouse');
-    const all = [...settings.equipmentStatuses, ...settings.menuItemStatuses];
+    const all = [...settings.equipmentStatuses, ...settings.menuItemStatuses, ...settings.tableStatuses];
     for (const target of Object.values(settings.statusAliases)) {
       expect(all).toContain(target);
     }
@@ -51,9 +64,9 @@ describe('templates', () => {
     }
   });
 
-  it('has three different workspaces with three different ids', () => {
+  it('has four different workspaces with four different ids', () => {
     const ids = listTemplates().map((template) => template.workspace.id);
-    expect(ids).toEqual(['northside-warehouse', 'harbor-cafe', 'eastside-repairs']);
+    expect(ids).toEqual(['northside-warehouse', 'harbor-cafe', 'lakeview-restaurant', 'eastside-repairs']);
   });
 
   it('the warehouse fixture matches the demo script', () => {

@@ -65,7 +65,7 @@ Claude Desktop / Code                later: Alexa Lambda · Dashboard · Fire TV
                   syncWorker.ts  syncService.ts  syncPorts.ts  sheetRows.ts
       domain/     schemas.ts  types.ts  matcher.ts  normalize.ts  status.ts  board.ts  json.ts
                   operations/{types,adjustQuantity,setStatus,assignJob,reverseEvent,registry}.ts   rules/{lowStock,index}.ts
-      templates/  types.ts  shared.ts  warehouse.ts  cafe.ts  repair.ts  index.ts
+      templates/  types.ts  shared.ts  warehouse.ts  cafe.ts  restaurant.ts  repair.ts  index.ts
       infra/      db/{pool,migrator,admin,pgStore,pgSyncQueue,integrations,seed}.ts  db/migrations/*
                   sheets/{googleGateway,googleClient}.ts
       worker/     main.ts  bin.ts   (the spreadsheet sync process)
@@ -145,7 +145,7 @@ Mark `confirm-command` with `destructiveHint` so the client's own permission pro
 
 ## 5. Data model and commit transaction
 
-**Tables:** `workspaces` (with `board_version` and an `integrations` jsonb, e.g. `{"sheets": {"spreadsheetId": "…"}}`; no key means the destination is not configured), `resources` (jsonb `attributes`, `aliases`, `version`), `events` (columns `request_args`, `before_state`, `after_state`, `summary`, `client_name`), `sync_jobs`, `commands` (pending changes awaiting a yes, token hash only), `alerts` (partial unique index: one open alert per resource and rule), and `devices` (stub, later). `sheet_rows` was planned but not needed: the Resources tab is rewritten as a snapshot (§7). Built: `workspaces`, `resources`, `events`, `sync_jobs` (migration `0001_init`) and `commands`, `alerts`, a unique index on `events.reversal_of` (migration `0002_confirmations_alerts`). Migrations are TypeScript modules in `infra/db/migrations/` applied by `npm run db:migrate`; the server refuses to start if the schema is behind.
+**Tables:** `workspaces` (with `board_version` and an `integrations` jsonb, e.g. `{"sheets": {"spreadsheetId": "…"}}`; no key means the destination is not configured), `resources` (jsonb `attributes`, `aliases`, `version`), `events` (columns `request_args`, `before_state`, `after_state`, `summary`, `client_name`), `sync_jobs`, `commands` (pending changes awaiting a yes, token hash only), `alerts` (partial unique index: one open alert per resource and rule), and `devices` (stub, later). `sheet_rows` was planned but not needed: the Resources tab is rewritten as a snapshot (§7). Built: `workspaces`, `resources`, `events`, `sync_jobs` (migration `0001_init`), `commands`, `alerts`, a unique index on `events.reversal_of` (migration `0002_confirmations_alerts`) and `collections` plus `resources.collection_key` (migration `0003_collections`, M5.1: named lists whose kind each resource must match, enforced by a composite foreign key). Migrations are TypeScript modules in `infra/db/migrations/` applied by `npm run db:migrate`; the server refuses to start if the schema is behind.
 
 **Constraints that carry the guarantees:**
 - `events.command_id` is unique.
@@ -249,6 +249,48 @@ Effort figures are rough ranges for one engineer comfortable with TypeScript. Th
 | **M4** Hardening | Streamable HTTP with auth, optional read-only board endpoint for the TV, `reset-workspace`, scripted demo prompt, 3 clean consecutive runs | Demo passes 3 times without manual DB edits | ~1 day |
 |  | *Progress:* board endpoint and page built (§8a); demo script written ([`demo-script.md`](demo-script.md)); `reset-workspace` built in M3. **Still open:** Streamable HTTP transport with auth (needs a decision, see §12), three rehearsals by a person, clean-up of expired pending changes. | | |
 | **Later** | Alexa Lambda calling the same `CommandService` through the engine API | n/a | n/a |
+
+## 10a. M5: setup console and configurable collections (proposed 2026-10-20)
+
+**Goal.** A person with no code or SQL sets up a business (a restaurant, say) in a web console, decides **which lists exist, what is in them, and which channel may see or change each one**, and presses "Go live". From then on Claude, Alexa and the Fire TV board use the same engine with exactly those lists and permissions.
+
+**Decisions made with the user (2026-10-20):** v1 covers outlets, restaurant tables, inventory and dishes (and the other existing kinds); each list has per-channel access (which lists Alexa may use); an Alexa user can choose which list to update and keep updating it; the console runs on localhost with one admin (real login later); the console is React + Vite. Assumed (not yet confirmed): this is a generic product with fictional data, not one named client.
+
+**Vocabulary.**
+- **Outlet** = a workspace (one location). Several outlets may belong to one business later.
+- **Collection** = a named list inside an outlet (the user's "data table": Dishes, Ingredients, Kitchen equipment, Dining tables). In the console it needs a friendlier label than "table" (which already means a dining table); to be decided with the user. Code says `collection`.
+- **Kind** = how a collection behaves, which fixes the operations that apply. A kind is one of the resource types: `inventory_item` (quantity, unit, reorder level, low-stock alert), `menu_item` (price, available / sold out), `equipment` (available / maintenance / out of service), **`dining_table` (new: free / occupied / reserved / cleaning, number of seats)**, `job`, `technician`. A user cannot invent new kinds or free-form fields in v1: every voice operation needs a kind it understands, and a free-form schema would also make confirmation, undo, alerts and the Sheets mirror unsafe to reason about. New kinds are code (an operation file plus a schema).
+- **Channel** = who is asking: `mcp` (Claude), `alexa`, `dashboard` (the console and display screens, including the board page and Fire TV).
+
+**Data model changes (additive; existing behaviour unchanged).**
+- Table `collections (workspace_id, key, label, kind, aliases, position, access jsonb)`; `resources.collection_key` references it (a resource's `type` must equal its collection's kind). Migration `0003` backfills one collection per (workspace, type) so nothing existing breaks.
+- `access` is `{ "<channel>": "none" | "read" | "update" }`. A missing channel means `none`. New collections default to `mcp: update`, `dashboard: read`, `alexa: none`: **a channel gets nothing until someone grants it.**
+- Later (M5.2) the settings that live in code templates today (`WorkspaceSettings`: status vocabulary, thresholds, labels and aliases; the board title and headline numbers) move to `workspaces.settings` / `workspaces.board`, seeded from the presets. The code templates (warehouse, cafe, repair, and a new **restaurant**) become starter presets.
+- Table `config_events` (who, when, what, before, after) records every setup change; it is separate from `events`, which describe resource changes.
+
+**Access policy (enforced by the engine, never by the model).** `none` means invisible: searches, lookups, the board, the activity log and alerts omit it and a command naming it gets "not found", so a channel cannot even learn that it exists. `read` allows lookups; `update` also allows changes. The check runs when a command is resolved **and again under lock when a confirmation is applied** (a permission removed in between wins). Undo needs `update` on the resource it would touch. The sheet mirror is an internal view and is not channel-filtered.
+
+**Alexa chooses a list.** The engine accepts an optional `collection` (key or spoken alias, such as "inventory") that limits what a command or search can match, which also shrinks ambiguity ("filter" cannot mean a dish). The Alexa adapter keeps the chosen list in the session ("update inventory", then "add twenty air filters") and can answer "which lists can I update?" from the policy. Alexa users map to an actor and an outlet through account linking (M5.4).
+
+**Setup lifecycle.** An outlet is `draft` until "Go live". Go live checks it (every list has a kind and a name; no two items in one list share a spoken name or alias; every stock item has a reorder level; at least one channel has access to at least one list). Only live outlets are addressable by the voice channels; drafts exist only for the admin API.
+
+**Console.** React + Vite + TypeScript in `admin-web/`, built to static files and served, with the Admin API, by a separate process (`npm run admin`, 127.0.0.1 only, like the board). Screens: outlets; setup wizard (basics → lists → items → access → review and go live); list editor (kind, label, aliases); items grid with CSV import and export; access matrix (lists by channel); status vocabulary; board preview; setup history. **Security on localhost with no login:** a request must carry a custom header whose value is a per-process token that only the same-origin page receives (no CORS headers are sent), plus the Host allow-list and an `Origin` check, so a web page on another site cannot drive the API through the admin's browser (CSRF, DNS rebinding). The token is never logged. Writes use the same validation schemas as the engine.
+
+**Milestones.** Sizing is for review by the PM / Delivery Head once scope is final.
+
+| Step | Scope | Exit condition |
+| --- | --- | --- |
+| **M5.1** Collections and dining tables | **Built 2026-10-20.** `collections`, migration `0003`, `dining_table` kind end to end (SET_STATUS, board numbers, spoken text, sheet row, board page), **restaurant** preset with four collections, `get-workspace` lists collections | A seeded restaurant outlet works through Claude, e.g. "mark table five reserved" asks, then applies; all gates green (**met**: also run over stdio against the dev database) |
+| **M5.2** Access policy and Admin API | per-channel access enforced for reads, board and commands (incl. re-check at confirmation); optional `collection` scope; `workspaces.settings` / `board` in the database; draft / live; localhost Admin API with audit | Tests prove a channel with `none` sees and changes nothing in a list; an outlet can be created and configured with API calls only |
+| **M5.3** Setup console | React console as above | A non-developer builds an outlet from scratch and goes live without code or SQL (a person rehearses it) |
+| **M5.4** Engine API and real auth | HTTPS command and read API with per-device or per-user credentials mapping to actor, outlet and channel; roles for the console | Shared with the Alexa adapter; needs the hosting decision |
+| **M5.5** Alexa adapter and Fire TV | skill calling the engine API, list focus in the session, board on the Fire TV | Spoken flow works on a real device (needs an Alexa developer account; not available yet) |
+
+**Risks and things to verify (not verified; docs were not reachable).**
+- Alexa skills match what the user says against slot values. Menus and stock change at runtime, so the skill will probably need free-text slots or dynamic entities, with this engine's matcher as the real resolver. Check Amazon's current documentation.
+- Which spoken languages Alexa supports for the skill (Hindi and English for India are expected; Tamil is not expected to be supported). The matcher is untested on Tamil script, so aliases should be Latin-script transliterations ("dosai").
+- The localhost-only admin is fine for a demo but cannot go to a client as is: M5.4 must land first.
+- Moving settings from code to the database changes how presets and tests work; it is the largest refactor in M5.
 
 ## 11. Deviations from the product-level plan
 

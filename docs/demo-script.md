@@ -1,6 +1,6 @@
 # Demo script
 
-A ten-minute run that shows the whole idea: you talk to Claude, Claude calls the VoiceOps tools, the server decides what is allowed, and a screen shows the result. Everything here uses the three fictional demo workspaces. Status: **written from the implemented behaviour and tried piece by piece; three clean consecutive rehearsals by a person are still to do** (checklist at the end).
+A ten-minute run that shows the whole idea: you talk to Claude, Claude calls the VoiceOps tools, the server decides what is allowed, and a screen shows the result. Everything here uses the four fictional demo workspaces. Status: **written from the implemented behaviour and tried piece by piece; three clean consecutive rehearsals by a person are still to do** (checklist at the end).
 
 ## Before you start (about two minutes)
 
@@ -10,14 +10,14 @@ A ten-minute run that shows the whole idea: you talk to Claude, Claude calls the
    npm run db:reset
    ```
 
-2. The server is built (`npm --prefix server-ts run build`) and registered with Claude as in the README. Include all three workspaces: `VOICEOPS_WORKSPACES=northside-warehouse,harbor-cafe,eastside-repairs`. Restart the client after a rebuild.
+2. The server is built (`npm --prefix server-ts run build`) and registered with Claude as in the README. Include all four workspaces: `VOICEOPS_WORKSPACES=northside-warehouse,harbor-cafe,lakeview-restaurant,eastside-repairs`. Restart the client after a rebuild.
 3. Start the board on a second screen or window and leave it running:
 
    ```bash
-   VOICEOPS_WORKSPACES=northside-warehouse,harbor-cafe,eastside-repairs npm run board
+   VOICEOPS_WORKSPACES=northside-warehouse,harbor-cafe,lakeview-restaurant,eastside-repairs npm run board
    ```
 
-   The board serves only the workspaces on that list, like the MCP server, so name all three. Open <http://127.0.0.1:8787/> (the warehouse). The cafe is `/board/harbor-cafe`, the repair shop `/board/eastside-repairs`. A board that is open when the data is reset updates itself within a few seconds.
+   The board serves only the workspaces on that list, like the MCP server, so name all four. Open <http://127.0.0.1:8787/> (the warehouse). The cafe is `/board/harbor-cafe`, the restaurant `/board/lakeview-restaurant`, the repair shop `/board/eastside-repairs`. A board that is open when the data is reset updates itself within a few seconds.
 4. Optional: for the spreadsheet part, connect a workspace to a Google Sheet ([`google-sheets-setup.md`](google-sheets-setup.md)) and run `npm run worker`. Skip the lines marked *(sheet)* if you have not.
 
 ## The script
@@ -45,6 +45,10 @@ Say it however you like; the wording does not have to be exact. "Board" means th
 | 10 | "In the cafe, mark biryani sold out." | Claude asks which biryani (Chicken or Veg). Answer "Chicken Biryani", confirm. The cafe board shows it struck through. |
 | 11 | "In the repair shop, assign job one oh eight to Rahul." | Read-back, then confirm. The repair board shows Rahul on Job 108. |
 | 12 | "Assign job 110 to Vikram." | Refused: Vikram is off duty. Nothing changes. |
+| 13 | "In the restaurant, what lists do we have?" | Dishes, Ingredients, Kitchen equipment and Dining tables, with how many things are in each. |
+| 14 | "Mark table five reserved." | Claude reads it back ("Mark Table 5 as reserved (currently free)?") and waits. Say yes: the restaurant board shows Table 5 reserved (blue) and "Tables free" drops by one. |
+| 15 | "Mark paneer sold out." | The dish (Paneer Tikka) is the only thing a status can change, so Claude asks about that, not the ingredient. Say no. |
+| 16 | "Remove eight kilos of paneer." | Paneer drops to 4 kg, below its reorder level of 5: low-stock alert on the board. Stock is counted in kg here, not pieces. |
 
 ### Act 3: when things go wrong *(optional)*
 

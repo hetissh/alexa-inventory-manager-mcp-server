@@ -314,6 +314,32 @@ describe('the board page script', () => {
     ].sort((a, b) => ['Stock', 'Equipment', 'Menu', 'Jobs', 'Technicians'].indexOf(a) - ['Stock', 'Equipment', 'Menu', 'Jobs', 'Technicians'].indexOf(b)));
   });
 
+  it('draws dining tables with their seats, and marks the ones that are busy or held', async () => {
+    const page = startPage();
+    await page.next(
+      ok(
+        board({
+          alerts: [],
+          resources: [
+            { id: 'table_1', type: 'dining_table', name: 'Table 1', attributes: { status: 'free', seats: 2 }, hasAlert: false },
+            { id: 'table_3', type: 'dining_table', name: 'Table 3', attributes: { status: 'occupied', seats: 4 }, hasAlert: false },
+            { id: 'table_6', type: 'dining_table', name: 'Table 6', attributes: { status: 'reserved', seats: 8 }, hasAlert: false },
+            { id: 'table_7', type: 'dining_table', name: 'Table 7', attributes: { status: 'cleaning', seats: 2 }, hasAlert: false },
+          ],
+        }),
+      ),
+    );
+
+    const rows = Object.fromEntries(page.node('resources').all('row').map((row) => [row.children[0]?.textContent ?? '', row]));
+    expect(rows['Table 1']?.textContent).toBe('Table 1seats 2free');
+    expect(rows['Table 3']?.textContent).toBe('Table 3seats 4occupied');
+    expect(rows['Table 3']?.className).toContain('busy');
+    expect(rows['Table 6']?.textContent).toBe('Table 6seats 8reserved');
+    expect(rows['Table 6']?.className).toContain('held');
+    expect(rows['Table 7']?.className).not.toMatch(/busy|held/);
+    expect(page.node('resources').children.map((group) => group.children[0]?.textContent)).toEqual(['Tables']);
+  });
+
   it('puts server text on the page as text, never as markup', async () => {
     const hostile = '<img src=x onerror=alert(1)>';
     const page = startPage();

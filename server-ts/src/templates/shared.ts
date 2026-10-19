@@ -6,6 +6,7 @@ export const COMMON_SETTINGS: WorkspaceSettings = {
   maxAdjustment: 10_000,
   equipmentStatuses: ['available', 'maintenance', 'out_of_service'],
   menuItemStatuses: ['available', 'sold_out'],
+  tableStatuses: ['free', 'occupied', 'reserved', 'cleaning'],
   statusLabels: {
     maintenance: 'under maintenance',
     out_of_service: 'out of service',
@@ -23,5 +24,15 @@ export const COMMON_SETTINGS: WorkspaceSettings = {
     'out of stock': 'sold_out',
     finished: 'sold_out',
     unavailable: 'sold_out',
+    // Dining tables.
+    available: 'free',
+    vacant: 'free',
+    empty: 'free',
+    seated: 'occupied',
+    taken: 'occupied',
+    busy: 'occupied',
+    booked: 'reserved',
+    dirty: 'cleaning',
+    'being cleaned': 'cleaning',
   },
 };

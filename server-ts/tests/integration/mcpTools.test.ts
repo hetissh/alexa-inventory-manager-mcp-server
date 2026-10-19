@@ -10,7 +10,7 @@ import {
   TEST_ACTOR,
   TEST_CLIENT_INFO,
 } from '../helpers/connect.js';
-import { ALL_WORKSPACE_IDS, CAFE_ID, REPAIR_ID, WORKSPACE_ID } from '../helpers/db.js';
+import { ALL_WORKSPACE_IDS, CAFE_ID, REPAIR_ID, RESTAURANT_ID, WORKSPACE_ID } from '../helpers/db.js';
 
 let pair: ConnectedPair | undefined;
 
@@ -556,6 +556,54 @@ describe('workspaces', () => {
     const cafe = await call(connected, 'get-workspace', { workspaceId: CAFE_ID });
     expect(cafe.data).toMatchObject({ counts: { menu_item: 5 }, settings: { menuItemStatuses: ['available', 'sold_out'] } });
     expect(cafe.data['settings']).not.toHaveProperty('equipmentStatuses');
+  });
+
+  it('get-workspace names the lists a workspace is organised into', async () => {
+    const connected = await connect();
+
+    const warehouse = await call(connected, 'get-workspace');
+    expect(warehouse.data['collections']).toEqual([
+      { key: 'stock', label: 'Stock', kind: 'inventory_item', aliases: ['inventory'], itemCount: 3 },
+      { key: 'equipment', label: 'Equipment', kind: 'equipment', aliases: [], itemCount: 1 },
+    ]);
+
+    const restaurant = await call(connected, 'get-workspace', { workspaceId: RESTAURANT_ID });
+    expect(restaurant.data).toMatchObject({
+      name: 'Lakeview Restaurant',
+      template: 'restaurant',
+      counts: { menu_item: 5, inventory_item: 4, equipment: 2, dining_table: 6 },
+      settings: { tableStatuses: ['free', 'occupied', 'reserved', 'cleaning'], menuItemStatuses: ['available', 'sold_out'] },
+    });
+    expect(restaurant.data['collections']).toEqual([
+      { key: 'dishes', label: 'Dishes', kind: 'menu_item', aliases: ['menu'], itemCount: 5 },
+      { key: 'ingredients', label: 'Ingredients', kind: 'inventory_item', aliases: ['inventory', 'stock'], itemCount: 4 },
+      { key: 'kitchen_equipment', label: 'Kitchen equipment', kind: 'equipment', aliases: ['equipment', 'kitchen'], itemCount: 2 },
+      { key: 'dining_tables', label: 'Dining tables', kind: 'dining_table', aliases: ['tables'], itemCount: 6 },
+    ]);
+    expect((await call(connected, 'get-workspace', { workspaceId: CAFE_ID })).data['counts']).not.toHaveProperty('dining_table');
+  });
+
+  it('a table can be reserved through set-status, after the user says yes', async () => {
+    const connected = await connect();
+
+    const asked = await call(connected, 'set-status', { workspaceId: RESTAURANT_ID, resource: 'table five', status: 'reserved' });
+    expect(asked.data).toMatchObject({
+      status: 'confirmation_required',
+      confirmation: { readback: 'Mark Table 5 as reserved (currently free)?' },
+    });
+    const confirmation = asked.data['confirmation'] as { token: string };
+
+    const done = await call(connected, 'confirm-command', { workspaceId: RESTAURANT_ID, token: confirmation.token });
+    expect(done.data).toMatchObject({ status: 'committed', resource: { id: 'table_5', attributes: { status: 'reserved', seats: 4 } } });
+    const found = await call(connected, 'find-resources', { workspaceId: RESTAURANT_ID, type: 'dining_table' });
+    expect((found.data['items'] as { name: string }[]).map((item) => item.name)).toEqual([
+      'Table 1',
+      'Table 2',
+      'Table 3',
+      'Table 4',
+      'Table 5',
+      'Table 6',
+    ]);
   });
 
   it('get-workspace says when a spreadsheet is configured', async () => {

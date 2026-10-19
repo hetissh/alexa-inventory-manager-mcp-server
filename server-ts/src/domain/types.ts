@@ -8,7 +8,7 @@ export type CommandSource = (typeof COMMAND_SOURCES)[number];
 export const OPERATION_NAMES = ['ADJUST_QUANTITY', 'SET_STATUS', 'ASSIGN_JOB', 'REVERSE_EVENT'] as const;
 export type OperationName = (typeof OPERATION_NAMES)[number];
 
-export const TEMPLATE_IDS = ['warehouse', 'cafe', 'repair'] as const;
+export const TEMPLATE_IDS = ['warehouse', 'cafe', 'restaurant', 'repair'] as const;
 export type TemplateId = (typeof TEMPLATE_IDS)[number];
 
 export const JOB_STATUSES = ['waiting', 'assigned', 'in_progress', 'done'] as const;
@@ -39,6 +39,8 @@ export interface WorkspaceSettings {
   readonly equipmentStatuses: readonly string[];
   /** Statuses a menu item may be in. */
   readonly menuItemStatuses: readonly string[];
+  /** Statuses a dining table may be in. */
+  readonly tableStatuses: readonly string[];
   /** How a status is said aloud, when it differs from the status with underscores replaced by spaces. */
   readonly statusLabels: Readonly<Record<string, string>>;
   /** Other ways people say a status ("broken" for out_of_service). Keys are lowercase. */

@@ -17,13 +17,13 @@ const inputSchema = {
     .trim()
     .min(1)
     .max(100)
-    .describe('The equipment or menu item as the user named it, for example "compressor two" or "chicken biryani".'),
+    .describe('The equipment, menu item or dining table as the user named it, for example "compressor two", "chicken biryani" or "table five".'),
   status: z
     .string()
     .trim()
     .min(1)
     .max(40)
-    .describe('The new status as the user said it, for example "under maintenance", "out of service", "available" or "sold out".'),
+    .describe('The new status as the user said it, for example "under maintenance", "out of service", "available", "sold out", "reserved" or "cleaning".'),
   idempotencyKey: idempotencyKeyParam,
   workspaceId: workspaceIdParam,
 };
@@ -34,7 +34,7 @@ export function registerSetStatus(server: McpServer, context: ToolContext): void
     {
       title: 'Change a status',
       description: [
-        'Changes the status of a piece of equipment (available, under maintenance, out of service) or a menu item (available, sold out), for example "mark compressor two under maintenance" or "mark chicken biryani sold out".',
+        'Changes the status of a piece of equipment (available, under maintenance, out of service), a menu item (available, sold out) or a dining table (free, occupied, reserved, cleaning), for example "mark compressor two under maintenance", "mark chicken biryani sold out" or "mark table five reserved".',
         'Pass the name and status as the user said them; the server matches them. If the status is "ambiguous" or "not_found", ask the user which one they meant and wait: do not retry with a guess.',
         'A "rejected" result means nothing changed: tell the user why (for example the status is not valid for that item, or it already has that status).',
         CONFIRMATION_GUIDANCE,

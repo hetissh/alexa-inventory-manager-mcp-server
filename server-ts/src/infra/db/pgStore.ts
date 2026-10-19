@@ -9,6 +9,8 @@ import {
 import type { ListedEvent, NewAlert, NewCommand, NewEvent, Store, TransactionStore } from '../../app/ports.js';
 import {
   alertRecordSchema,
+  type Collection,
+  collectionSchema,
   commandRecordSchema,
   eventRecordSchema,
   type Resource,
@@ -50,6 +52,17 @@ interface ResourceRow extends QueryResultRow {
   attributes: unknown;
   version: number;
   updated_at: Date;
+  collection_key: string;
+}
+
+interface CollectionRow extends QueryResultRow {
+  workspace_id: string;
+  key: string;
+  label: string;
+  kind: string;
+  aliases: string[];
+  position: number;
+  item_count: string;
 }
 
 interface EventRow extends QueryResultRow {
@@ -125,10 +138,25 @@ function toResource(row: ResourceRow): Resource {
     type: row.type,
     name: row.name,
     aliases: row.aliases,
+    collection: row.collection_key,
     attributes: row.attributes,
     version: row.version,
     updatedAt: row.updated_at,
   });
+}
+
+function toCollection(row: CollectionRow): Collection & { readonly itemCount: number } {
+  return {
+    ...collectionSchema.parse({
+      workspaceId: row.workspace_id,
+      key: row.key,
+      label: row.label,
+      kind: row.kind,
+      aliases: row.aliases,
+      position: row.position,
+    }),
+    itemCount: Number(row.item_count),
+  };
 }
 
 function toEvent(row: EventRow): EventRecord {
@@ -219,6 +247,19 @@ function createReads(
         [workspaceId, types],
       );
       return result.rows.map(toResource);
+    },
+
+    async listCollections(workspaceId) {
+      const result = await db.query<CollectionRow>(
+        `SELECT c.*, count(r.id) AS item_count
+           FROM collections c
+           LEFT JOIN resources r ON r.workspace_id = c.workspace_id AND r.collection_key = c.key
+          WHERE c.workspace_id = $1
+          GROUP BY c.workspace_id, c.key
+          ORDER BY c.position, c.key`,
+        [workspaceId],
+      );
+      return result.rows.map(toCollection);
     },
 
     async listEvents(workspaceId, options): Promise<ListedEvent[]> {

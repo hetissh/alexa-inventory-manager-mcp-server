@@ -36,7 +36,7 @@ describe('db CLI', () => {
   it('migrates, then says the schema is up to date', async () => {
     await withTempDatabase(async (url) => {
       await ensureDatabase(url);
-      expect((await run(['migrate'], { DATABASE_URL: url })).lines).toEqual(['Applied migrations: 0001_init, 0002_confirmations_alerts.']);
+      expect((await run(['migrate'], { DATABASE_URL: url })).lines).toEqual(['Applied migrations: 0001_init, 0002_confirmations_alerts, 0003_collections.']);
       expect((await run(['migrate'], { DATABASE_URL: url })).lines).toEqual(['Schema is up to date.']);
     });
   });
@@ -58,9 +58,10 @@ describe('db CLI', () => {
       expect(first.code).toBe(0);
       expect(first.lines).toEqual([
         expect.stringMatching(/: created\.$/),
-        'Applied migrations: 0001_init, 0002_confirmations_alerts.',
+        'Applied migrations: 0001_init, 0002_confirmations_alerts, 0003_collections.',
         'Workspace northside-warehouse: 4 resource(s) added.',
         'Workspace harbor-cafe: 5 resource(s) added.',
+        'Workspace lakeview-restaurant: 17 resource(s) added.',
         'Workspace eastside-repairs: 8 resource(s) added.',
       ]);
 
@@ -70,6 +71,7 @@ describe('db CLI', () => {
         'Schema is up to date.',
         'Workspace northside-warehouse: 0 resource(s) added.',
         'Workspace harbor-cafe: 0 resource(s) added.',
+        'Workspace lakeview-restaurant: 0 resource(s) added.',
         'Workspace eastside-repairs: 0 resource(s) added.',
       ]);
 
@@ -82,6 +84,7 @@ describe('db CLI', () => {
           lines: [
             'Workspace northside-warehouse: reset to the fixture.',
             'Workspace harbor-cafe: reset to the fixture.',
+            'Workspace lakeview-restaurant: reset to the fixture.',
             'Workspace eastside-repairs: reset to the fixture.',
           ],
         });

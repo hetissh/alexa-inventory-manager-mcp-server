@@ -35,7 +35,7 @@ export const resourceIdSchema = z.string().regex(/^[a-z][a-z0-9_]{2,63}$/, 'must
 export const resourceNameSchema = safeText(80);
 export const aliasesSchema = z.array(resourceNameSchema).max(10);
 
-export const RESOURCE_TYPES = ['inventory_item', 'equipment', 'menu_item', 'job', 'technician'] as const;
+export const RESOURCE_TYPES = ['inventory_item', 'equipment', 'menu_item', 'dining_table', 'job', 'technician'] as const;
 export const resourceTypeSchema = z.enum(RESOURCE_TYPES);
 export type ResourceType = z.infer<typeof resourceTypeSchema>;
 
@@ -55,6 +55,11 @@ export const menuItemAttributesSchema = z.object({
   status: statusSchema,
 });
 
+export const diningTableAttributesSchema = z.object({
+  status: statusSchema,
+  seats: z.number().int().positive().max(100),
+});
+
 export const jobAttributesSchema = z.object({
   status: z.enum(JOB_STATUSES),
   assigneeId: resourceIdSchema.nullable(),
@@ -63,13 +68,39 @@ export const jobAttributesSchema = z.object({
 
 export const technicianAttributesSchema = z.object({ active: z.boolean() });
 
-const seedBase = { id: resourceIdSchema, name: resourceNameSchema, aliases: aliasesSchema };
+/**
+ * A collection is a named list inside a workspace (the user's "data table": Dishes, Ingredients, Dining tables).
+ * Its `kind` is one of the resource types and decides which operations apply to what is in it.
+ */
+export const collectionKeySchema = z.string().regex(/^[a-z][a-z0-9_]{2,39}$/, 'must be a lowercase identifier (a-z, 0-9, _)');
+export const collectionSeedSchema = z.object({
+  key: collectionKeySchema,
+  label: safeText(60),
+  kind: resourceTypeSchema,
+  aliases: aliasesSchema,
+});
+export type CollectionSeed = z.infer<typeof collectionSeedSchema>;
+
+export const collectionSchema = collectionSeedSchema.extend({
+  workspaceId: workspaceIdSchema,
+  position: z.number().int().nonnegative(),
+});
+export type Collection = z.infer<typeof collectionSchema>;
+
+const seedBase = {
+  id: resourceIdSchema,
+  name: resourceNameSchema,
+  aliases: aliasesSchema,
+  /** The key of the collection this resource lives in. Its kind must equal the resource's type. */
+  collection: collectionKeySchema,
+};
 
 /** A resource as written in a template/fixture, before it has a workspace, version or timestamps. */
 export const resourceSeedSchema = z.discriminatedUnion('type', [
   z.object({ ...seedBase, type: z.literal('inventory_item'), attributes: inventoryAttributesSchema }),
   z.object({ ...seedBase, type: z.literal('equipment'), attributes: equipmentAttributesSchema }),
   z.object({ ...seedBase, type: z.literal('menu_item'), attributes: menuItemAttributesSchema }),
+  z.object({ ...seedBase, type: z.literal('dining_table'), attributes: diningTableAttributesSchema }),
   z.object({ ...seedBase, type: z.literal('job'), attributes: jobAttributesSchema }),
   z.object({ ...seedBase, type: z.literal('technician'), attributes: technicianAttributesSchema }),
 ]);
@@ -81,6 +112,7 @@ export const resourceSchema = z.discriminatedUnion('type', [
   z.object({ ...seedBase, ...persistedBase, type: z.literal('inventory_item'), attributes: inventoryAttributesSchema }),
   z.object({ ...seedBase, ...persistedBase, type: z.literal('equipment'), attributes: equipmentAttributesSchema }),
   z.object({ ...seedBase, ...persistedBase, type: z.literal('menu_item'), attributes: menuItemAttributesSchema }),
+  z.object({ ...seedBase, ...persistedBase, type: z.literal('dining_table'), attributes: diningTableAttributesSchema }),
   z.object({ ...seedBase, ...persistedBase, type: z.literal('job'), attributes: jobAttributesSchema }),
   z.object({ ...seedBase, ...persistedBase, type: z.literal('technician'), attributes: technicianAttributesSchema }),
 ]);

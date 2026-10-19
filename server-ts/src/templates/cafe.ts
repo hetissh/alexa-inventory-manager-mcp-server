@@ -14,9 +14,11 @@ export const cafeTemplate: Template = {
       { label: 'Sold out', kind: 'menu_sold_out' },
     ],
   },
+  collections: [{ key: 'menu', label: 'Menu', kind: 'menu_item', aliases: ['dishes'] }],
   resources: [
     {
       id: 'menu_chicken_biryani',
+      collection: 'menu',
       type: 'menu_item',
       name: 'Chicken Biryani',
       aliases: [],
@@ -24,6 +26,7 @@ export const cafeTemplate: Template = {
     },
     {
       id: 'menu_veg_biryani',
+      collection: 'menu',
       type: 'menu_item',
       name: 'Veg Biryani',
       aliases: [],
@@ -31,6 +34,7 @@ export const cafeTemplate: Template = {
     },
     {
       id: 'menu_lime_soda',
+      collection: 'menu',
       type: 'menu_item',
       name: 'Lime Soda',
       aliases: ['fresh lime soda'],
@@ -38,6 +42,7 @@ export const cafeTemplate: Template = {
     },
     {
       id: 'menu_masala_dosa',
+      collection: 'menu',
       type: 'menu_item',
       name: 'Masala Dosa',
       aliases: [],
@@ -45,6 +50,7 @@ export const cafeTemplate: Template = {
     },
     {
       id: 'menu_filter_coffee',
+      collection: 'menu',
       type: 'menu_item',
       name: 'Filter Coffee',
       aliases: ['coffee'],

@@ -68,6 +68,10 @@ export function spokenResource(resource: Resource): string {
       const { price, currency, status } = resource.attributes;
       return `${resource.name} (${String(price)} ${currency}) is ${status.replaceAll('_', ' ')}.`;
     }
+    case 'dining_table': {
+      const { seats, status } = resource.attributes;
+      return `${resource.name} (seats ${String(seats)}) is ${status.replaceAll('_', ' ')}.`;
+    }
     case 'job': {
       const { status, description } = resource.attributes;
       return `${resource.name} (${description}) is ${status.replaceAll('_', ' ')}.`;

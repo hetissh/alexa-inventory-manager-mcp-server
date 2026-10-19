@@ -15,13 +15,18 @@ export const repairTemplate: Template = {
       { label: 'Technicians on duty', kind: 'technicians_active' },
     ],
   },
+  collections: [
+    { key: 'technicians', label: 'Technicians', kind: 'technician', aliases: ['staff'] },
+    { key: 'jobs', label: 'Jobs', kind: 'job', aliases: [] },
+  ],
   resources: [
-    { id: 'tech_rahul', type: 'technician', name: 'Rahul', aliases: [], attributes: { active: true } },
-    { id: 'tech_priya', type: 'technician', name: 'Priya', aliases: [], attributes: { active: true } },
-    { id: 'tech_arjun', type: 'technician', name: 'Arjun', aliases: [], attributes: { active: true } },
-    { id: 'tech_vikram', type: 'technician', name: 'Vikram', aliases: [], attributes: { active: false } },
+    { id: 'tech_rahul', collection: 'technicians', type: 'technician', name: 'Rahul', aliases: [], attributes: { active: true } },
+    { id: 'tech_priya', collection: 'technicians', type: 'technician', name: 'Priya', aliases: [], attributes: { active: true } },
+    { id: 'tech_arjun', collection: 'technicians', type: 'technician', name: 'Arjun', aliases: [], attributes: { active: true } },
+    { id: 'tech_vikram', collection: 'technicians', type: 'technician', name: 'Vikram', aliases: [], attributes: { active: false } },
     {
       id: 'job_107',
+      collection: 'jobs',
       type: 'job',
       name: 'Job 107',
       aliases: [],
@@ -29,6 +34,7 @@ export const repairTemplate: Template = {
     },
     {
       id: 'job_108',
+      collection: 'jobs',
       type: 'job',
       name: 'Job 108',
       aliases: [],
@@ -36,6 +42,7 @@ export const repairTemplate: Template = {
     },
     {
       id: 'job_109',
+      collection: 'jobs',
       type: 'job',
       name: 'Job 109',
       aliases: [],
@@ -43,6 +50,7 @@ export const repairTemplate: Template = {
     },
     {
       id: 'job_110',
+      collection: 'jobs',
       type: 'job',
       name: 'Job 110',
       aliases: [],

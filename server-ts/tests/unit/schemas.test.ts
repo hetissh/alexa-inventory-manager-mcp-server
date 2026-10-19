@@ -67,6 +67,7 @@ describe('attributes', () => {
 describe('resources', () => {
   const seed = {
     id: 'item_air_filter',
+    collection: 'stock',
     type: 'inventory_item',
     name: 'Air Filter',
     aliases: ['air filters'],
@@ -149,7 +150,7 @@ describe('canonicalJson', () => {
 });
 
 describe('menu items, jobs and technicians', () => {
-  const base = { aliases: [] };
+  const base = { aliases: [], collection: 'things' };
 
   it('menu items need a price and a three-letter currency', () => {
     const item = { ...base, id: 'menu_dosa', type: 'menu_item', name: 'Dosa', attributes: { price: 120, currency: 'INR', status: 'available' } };
@@ -174,7 +175,7 @@ describe('menu items, jobs and technicians', () => {
   });
 
   it('a persisted resource of each type parses', () => {
-    const persisted = { workspaceId: 'northside-warehouse', version: 1, updatedAt: new Date(), aliases: [] };
+    const persisted = { workspaceId: 'northside-warehouse', version: 1, updatedAt: new Date(), aliases: [], collection: 'things' };
     for (const resource of [
       { id: 'menu_dosa', type: 'menu_item', name: 'Dosa', attributes: { price: 1, currency: 'INR', status: 'sold_out' } },
       { id: 'job_108', type: 'job', name: 'Job 108', attributes: { status: 'done', assigneeId: 'tech_rahul', description: 'x' } },

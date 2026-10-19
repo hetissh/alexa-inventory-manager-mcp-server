@@ -63,6 +63,8 @@ h2 { margin: 1.4rem 0 0.5rem; font-size: 1.1rem; letter-spacing: 0.06em; text-tr
 .row.soldout .detail { color: #8893ab; }
 .row.soldout .chip { background: #2a3248; color: #c4cce0; }
 .row.off .chip { background: #2a3248; color: #c4cce0; }
+.row.busy .chip { background: #4a3a0a; color: #ffd98a; }
+.row.held .chip { background: #1d3a5b; color: #bfe0ff; }
 .activity .row { grid-template-columns: 2fr 1fr; }
 .activity .detail { justify-self: end; }
 @media (max-width: 40rem) { .row { grid-template-columns: 1fr auto; } .row .detail { grid-column: 1 / -1; } }
@@ -82,6 +84,7 @@ export const BOARD_JS = `(function () {
     ['inventory_item', 'Stock'],
     ['equipment', 'Equipment'],
     ['menu_item', 'Menu'],
+    ['dining_table', 'Tables'],
     ['job', 'Jobs'],
     ['technician', 'Technicians']
   ];
@@ -126,6 +129,11 @@ export const BOARD_JS = `(function () {
     if (resource.type === 'menu_item') {
       if (a.status === 'sold_out') { classes.push('soldout'); }
       return row(resource, classes, a.price + ' ' + a.currency, spaced(a.status));
+    }
+    if (resource.type === 'dining_table') {
+      if (a.status === 'occupied') { classes.push('busy'); }
+      if (a.status === 'reserved') { classes.push('held'); }
+      return row(resource, classes, 'seats ' + a.seats, spaced(a.status));
     }
     if (resource.type === 'job') {
       var who = a.assigneeId ? (names[a.assigneeId] || a.assigneeId) : 'unassigned';

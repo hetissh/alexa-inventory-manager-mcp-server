@@ -17,9 +17,9 @@ const compressor = (): Resource => find(warehouseResources(), 'equipment_compres
 const biryani = (): Resource => find(cafeResources(), 'menu_chicken_biryani');
 
 describe('setStatus.bind', () => {
-  it('targets equipment and menu items', () => {
+  it('targets equipment, menu items and dining tables', () => {
     expect(setStatus.name).toBe('SET_STATUS');
-    expect(setStatus.targetTypes).toEqual(['equipment', 'menu_item']);
+    expect(setStatus.targetTypes).toEqual(['equipment', 'menu_item', 'dining_table']);
   });
 
   it.each([

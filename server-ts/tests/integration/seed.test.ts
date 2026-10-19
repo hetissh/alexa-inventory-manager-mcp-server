@@ -95,7 +95,9 @@ describe('seedWorkspace', () => {
   it('refuses invalid seed data before touching the database', async () => {
     const broken: Template = {
       ...warehouseTemplate,
-      resources: [{ id: 'Bad Id', type: 'equipment', name: 'X', aliases: [], attributes: { status: 'available' } }],
+      resources: [
+        { id: 'Bad Id', collection: 'equipment', type: 'equipment', name: 'X', aliases: [], attributes: { status: 'available' } },
+      ],
     };
 
     await expect(seedWorkspace(pool, broken, { reset: true })).rejects.toThrow();

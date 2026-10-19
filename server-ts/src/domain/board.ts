@@ -6,6 +6,9 @@ export const METRIC_KINDS = [
   'equipment_unavailable',
   'menu_available',
   'menu_sold_out',
+  'tables_free',
+  'tables_occupied',
+  'tables_reserved',
   'jobs_open',
   'jobs_unassigned',
   'technicians_active',
@@ -39,6 +42,11 @@ const MEASURES: Readonly<Record<MetricKind, Measure>> = {
     countWhere(resources, (r) => r.type === 'menu_item' && r.attributes.status === 'available'),
   menu_sold_out: (resources) =>
     countWhere(resources, (r) => r.type === 'menu_item' && r.attributes.status === 'sold_out'),
+  tables_free: (resources) => countWhere(resources, (r) => r.type === 'dining_table' && r.attributes.status === 'free'),
+  tables_occupied: (resources) =>
+    countWhere(resources, (r) => r.type === 'dining_table' && r.attributes.status === 'occupied'),
+  tables_reserved: (resources) =>
+    countWhere(resources, (r) => r.type === 'dining_table' && r.attributes.status === 'reserved'),
   jobs_open: (resources) => countWhere(resources, (r) => r.type === 'job' && r.attributes.status !== 'done'),
   jobs_unassigned: (resources) =>
     countWhere(resources, (r) => r.type === 'job' && r.attributes.status !== 'done' && r.attributes.assigneeId === null),

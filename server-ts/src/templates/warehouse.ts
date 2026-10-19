@@ -14,9 +14,14 @@ export const warehouseTemplate: Template = {
       { label: 'Equipment down', kind: 'equipment_unavailable' },
     ],
   },
+  collections: [
+    { key: 'stock', label: 'Stock', kind: 'inventory_item', aliases: ['inventory'] },
+    { key: 'equipment', label: 'Equipment', kind: 'equipment', aliases: [] },
+  ],
   resources: [
     {
       id: 'item_air_filter',
+      collection: 'stock',
       type: 'inventory_item',
       name: 'Air Filter',
       aliases: ['air filters'],
@@ -24,6 +29,7 @@ export const warehouseTemplate: Template = {
     },
     {
       id: 'item_oil_filter',
+      collection: 'stock',
       type: 'inventory_item',
       name: 'Oil Filter',
       aliases: ['oil filters'],
@@ -31,6 +37,7 @@ export const warehouseTemplate: Template = {
     },
     {
       id: 'item_brake_pads',
+      collection: 'stock',
       type: 'inventory_item',
       name: 'Brake Pads',
       aliases: ['brake pad set'],
@@ -38,6 +45,7 @@ export const warehouseTemplate: Template = {
     },
     {
       id: 'equipment_compressor_2',
+      collection: 'equipment',
       type: 'equipment',
       name: 'Compressor 2',
       aliases: ['air compressor 2'],

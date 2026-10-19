@@ -6,7 +6,7 @@ An MCP server that exposes the VoiceOps command/event engine (inventory, equipme
 - Architecture and build plan: [`docs/mcp-server-plan.md`](docs/mcp-server-plan.md)
 - Engineering rules for contributors and AI assistants: [`AGENTS.md`](AGENTS.md)
 
-**Status:** milestone M3 (spreadsheet sync) is built, tested against an in-memory stand-in for the spreadsheet, and has been run live against a real Google Sheet for the warehouse workspace (setup in [`docs/google-sheets-setup.md`](docs/google-sheets-setup.md); a change reached the sheet in about 3 seconds in the live check). Across three demo workspaces (warehouse, cafe, repair shop) Claude can look things up, add or remove stock, change a status, assign a job and undo. Anything risky waits for the user's explicit yes before it is applied. Every change is recorded with before/after values, low stock raises an alert by itself, and a versioned board snapshot is available for a future screen. A background worker copies every change to a Google Sheet (setup in [`docs/google-sheets-setup.md`](docs/google-sheets-setup.md)). A small web server (`npm run board`) shows each workspace's live board in a browser, ready for a wall screen or the Fire TV (see [Live board](#live-board)). A scripted run for showing it all is in [`docs/demo-script.md`](docs/demo-script.md).
+**Status:** milestone M3 (spreadsheet sync) is built, tested against an in-memory stand-in for the spreadsheet, and has been run live against a real Google Sheet for the warehouse workspace (setup in [`docs/google-sheets-setup.md`](docs/google-sheets-setup.md); a change reached the sheet in about 3 seconds in the live check). Across four demo workspaces (warehouse, cafe, restaurant, repair shop) Claude can look things up, add or remove stock, change a status (equipment, dishes, dining tables), assign a job and undo. Each workspace is organised into named lists ("collections": Dishes, Ingredients, Dining tables…); letting a person configure those lists and which channel (Claude, Alexa) may use each one is the planned next milestone (M5, see [`docs/mcp-server-plan.md`](docs/mcp-server-plan.md) §10a). Anything risky waits for the user's explicit yes before it is applied. Every change is recorded with before/after values, low stock raises an alert by itself, and a versioned board snapshot is available for a future screen. A background worker copies every change to a Google Sheet (setup in [`docs/google-sheets-setup.md`](docs/google-sheets-setup.md)). A small web server (`npm run board`) shows each workspace's live board in a browser, ready for a wall screen or the Fire TV (see [Live board](#live-board)). A scripted run for showing it all is in [`docs/demo-script.md`](docs/demo-script.md).
 
 ## Prerequisites
 
@@ -19,7 +19,7 @@ An MCP server that exposes the VoiceOps command/event engine (inventory, equipme
 ```bash
 nvm use
 npm --prefix server-ts install
-npm run db:setup          # creates the "voiceops" database, applies migrations, seeds the three demo workspaces
+npm run db:setup          # creates the "voiceops" database, applies migrations, seeds the four demo workspaces
 npm run local:gate        # typecheck + lint + tests (>= 90% per-file coverage) + build
 ```
 
@@ -29,6 +29,7 @@ npm run local:gate        # typecheck + lint + tests (>= 90% per-file coverage) 
 | --- | --- | --- |
 | `northside-warehouse` | Northside Operations (warehouse) | Air Filter 35, Oil Filter 20, Brake Pads 12, Compressor 2 (available) |
 | `harbor-cafe` | Harbor Cafe | Chicken Biryani ₹260, Veg Biryani ₹220, Lime Soda ₹80, Masala Dosa ₹120, Filter Coffee ₹60 (INR) |
+| `lakeview-restaurant` | Lakeview Restaurant | **Dishes** (Butter Chicken ₹380, Paneer Tikka, Garlic Naan, Masala Dosa, Gulab Jamun), **Ingredients** (Basmati Rice 40 kg, Paneer 12 kg, Chicken 25 kg, Cooking Oil 18 litres), **Kitchen equipment** (Tandoor, Walk-in Fridge), **Dining tables** (Tables 1 to 6: Table 3 occupied, Table 6 reserved) |
 | `eastside-repairs` | Eastside Repair Shop | Jobs 107 (done), 108, 109 (in progress, Priya), 110; technicians Rahul, Priya, Arjun, Vikram (off duty) |
 
 | Command (from the repo root, or `npm --prefix server-ts run <name>`) | What it does |
@@ -52,7 +53,7 @@ Environment variables, read by the server process (never commit real values; the
 | --- | --- | --- |
 | `DATABASE_URL` | `postgresql://localhost:5432/voiceops` | PostgreSQL connection string. May contain a password: keep it out of logs and the repo. |
 | `VOICEOPS_WORKSPACE` | `northside-warehouse` | The workspace used when a tool call does not name one. |
-| `VOICEOPS_WORKSPACES` | just `VOICEOPS_WORKSPACE` | Comma-separated **allow-list** of workspaces tools may address. Anything else is refused. Set it to all three ids to use the cafe and repair demos. |
+| `VOICEOPS_WORKSPACES` | just `VOICEOPS_WORKSPACE` | Comma-separated **allow-list** of workspaces tools may address. Anything else is refused. Set it to all four ids to use the cafe, restaurant and repair demos. |
 | `VOICEOPS_ACTOR_ID` | `manager-1` | Who changes are attributed to in the activity log. Only this person can confirm or undo what they asked for. |
 | `LOG_LEVEL` | `info` | `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent`. Logs go to **stderr** only; stdout carries MCP JSON-RPC. |
 | `VOICEOPS_ALLOW_REMOTE_RESET` | unset | Set to `1` to let `db:reset` run against a non-local database. |
@@ -73,7 +74,7 @@ Build first (`npm --prefix server-ts run build`) and make sure PostgreSQL is run
 **Claude Code** (run from the repo root):
 
 ```bash
-claude mcp add voiceops -e VOICEOPS_WORKSPACES=northside-warehouse,harbor-cafe,eastside-repairs -- /opt/homebrew/opt/node@24/bin/node "$PWD/server-ts/dist/bin.js"
+claude mcp add voiceops -e VOICEOPS_WORKSPACES=northside-warehouse,harbor-cafe,lakeview-restaurant,eastside-repairs -- /opt/homebrew/opt/node@24/bin/node "$PWD/server-ts/dist/bin.js"
 ```
 
 Add `--scope user` to make it available in every project, and `-e VOICEOPS_ACTOR_ID=your-name` to change who changes are attributed to. If you registered an earlier milestone, remove it first (`claude mcp remove voiceops`). Check with `claude mcp list`, or `/mcp` inside a session.
@@ -87,7 +88,7 @@ Add `--scope user` to make it available in every project, and `-e VOICEOPS_ACTOR
       "command": "/opt/homebrew/opt/node@24/bin/node",
       "args": ["/ABSOLUTE/PATH/TO/REPO/server-ts/dist/bin.js"],
       "env": {
-        "VOICEOPS_WORKSPACES": "northside-warehouse,harbor-cafe,eastside-repairs",
+        "VOICEOPS_WORKSPACES": "northside-warehouse,harbor-cafe,lakeview-restaurant,eastside-repairs",
         "VOICEOPS_ACTOR_ID": "manager-1"
       }
     }
@@ -115,6 +116,8 @@ Ask Claude, in a session that has the server connected. The wording does not hav
 
 **Cafe** (say "in the cafe"): "Mark biryani sold out." Claude asks which biryani; "Chicken Biryani" then asks you to confirm.
 
+**Restaurant** (say "in the restaurant"): "Mark table five reserved." Claude reads it back ("Mark Table 5 as reserved (currently free)?") and waits for your yes; the board's "Tables free" drops by one. "Mark butter chicken sold out" works the same way. "Remove eight kilos of paneer" drops it to 4 kg, below its reorder level, and raises a low-stock alert. "Paneer" means the ingredient when you change stock and the dish (Paneer Tikka) when you change a status, because each action only looks at things it can change. "What lists does the restaurant have?" shows Dishes, Ingredients, Kitchen equipment and Dining tables.
+
 **Repair shop** (say "in the repair shop"): "Assign job one oh eight to Rahul." Asks, then assigns. "Assign job 110 to Vikram" is refused (he is off duty).
 
 **Spreadsheet** (after setting it up as in [`docs/google-sheets-setup.md`](docs/google-sheets-setup.md) and starting `npm run worker`): "Add twenty air filters." Claude says the spreadsheet update is *pending*; the row appears in the sheet within a few seconds; "show me the recent changes" then reports it as *synced*. Stop the worker, make a change, and `get-workspace` shows it waiting; start the worker and it clears.
@@ -126,14 +129,14 @@ Say any change twice with an idempotency key ("using key demo-1") and the second
 | Tool | Type | Purpose |
 | --- | --- | --- |
 | `check-health` | read | Server version, uptime, default workspace, allowed workspaces, database status, connected client |
-| `get-workspace` | read | What a workspace contains, allowed statuses, which stock changes need approval |
+| `get-workspace` | read | What a workspace contains (its named lists and how many things are in each), allowed statuses, which stock changes need approval |
 | `find-resources` | read | Search by name; with no query, list everything with quantities, statuses and assignments |
 | `get-resource` | read | Look up one thing by the name people use ("compressor two", "job one oh eight") |
 | `get-board` | read | The live board: headline numbers, every resource, open alerts, latest changes, one versioned snapshot |
 | `list-events` | read | Activity log: who, when, before/after values, spreadsheet sync state |
 | `list-alerts` | read | Open (or resolved) alerts, such as low stock |
 | `adjust-quantity` | change | Add or remove units; large or zeroing changes ask first |
-| `set-status` | change | Equipment (available / under maintenance / out of service) or menu item (available / sold out); always asks first |
+| `set-status` | change | Equipment (available / under maintenance / out of service), menu item (available / sold out) or dining table (free / occupied / reserved / cleaning); always asks first |
 | `assign-job` | change | Give a job to an active technician; always asks first |
 | `undo-last-change` | change | Reverse your most recent change with a compensating event; always asks first |
 | `confirm-command` | change | Apply a waiting change after the user said yes (single-use token, about two minutes, only for the person who asked) |
@@ -152,7 +155,7 @@ Every committed change queues a job in the same database transaction. A separate
 `npm run board` starts a small, read-only web server that shows a workspace's board in any browser: big type, headline numbers, open alerts, every item with its quantity or status, and the latest changes. It is the first version of the screen the Fire TV will show, and it uses the same data as the `get-board` tool. Build first, make sure PostgreSQL is running, then:
 
 ```bash
-VOICEOPS_WORKSPACES=northside-warehouse,harbor-cafe,eastside-repairs npm run board
+VOICEOPS_WORKSPACES=northside-warehouse,harbor-cafe,lakeview-restaurant,eastside-repairs npm run board
 ```
 
 | Address | What it is |
@@ -180,4 +183,4 @@ server-ts/        TypeScript MCP server (src/, tests/)
 service-py/       reserved by AGENTS.md for data/AI workloads; not created yet
 ```
 
-Inside `server-ts/src`: `domain/` (pure rules and operations), `templates/` (the three demo workspaces), `app/` (command and read services, ports), `infra/` (PostgreSQL, Google Sheets), `mcp/` (tools), `http/` (the live-board web server), `worker/` (spreadsheet sync process). ESLint enforces the dependency direction.
+Inside `server-ts/src`: `domain/` (pure rules and operations), `templates/` (the four demo workspaces, each with its named lists), `app/` (command and read services, ports), `infra/` (PostgreSQL, Google Sheets), `mcp/` (tools), `http/` (the live-board web server), `worker/` (spreadsheet sync process). ESLint enforces the dependency direction.

@@ -1,5 +1,20 @@
 import type { WorkspaceSettings } from './types.js';
 
+/** The kinds of resource whose state is a single status word, and so can be changed with SET_STATUS. */
+export type StatusBearingType = 'equipment' | 'menu_item' | 'dining_table';
+
+/** The statuses a resource of this kind may be in, according to the workspace's settings. */
+export function allowedStatuses(type: StatusBearingType, settings: WorkspaceSettings): readonly string[] {
+  switch (type) {
+    case 'equipment':
+      return settings.equipmentStatuses;
+    case 'menu_item':
+      return settings.menuItemStatuses;
+    case 'dining_table':
+      return settings.tableStatuses;
+  }
+}
+
 type StatusSettings = Pick<WorkspaceSettings, 'statusLabels' | 'statusAliases'>;
 
 /** How a status is said aloud: "out_of_service" -> "out of service", unless the workspace overrides it. */

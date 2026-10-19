@@ -8,6 +8,7 @@ import { seedWorkspace } from '../../src/infra/db/seed.js';
 import { cafeTemplate } from '../../src/templates/cafe.js';
 import { listTemplates } from '../../src/templates/index.js';
 import { repairTemplate } from '../../src/templates/repair.js';
+import { restaurantTemplate } from '../../src/templates/restaurant.js';
 import { warehouseTemplate } from '../../src/templates/warehouse.js';
 
 export const DEFAULT_TEST_DATABASE_URL = 'postgresql://localhost:5432/voiceops_test';
@@ -15,6 +16,7 @@ export const TEST_DATABASE_URL = process.env['TEST_DATABASE_URL'] ?? DEFAULT_TES
 export const WORKSPACE_ID = warehouseTemplate.workspace.id;
 export const CAFE_ID = cafeTemplate.workspace.id;
 export const REPAIR_ID = repairTemplate.workspace.id;
+export const RESTAURANT_ID = restaurantTemplate.workspace.id;
 export const ALL_WORKSPACE_IDS = listTemplates().map((template) => template.workspace.id);
 
 export function createTestPool(url: string = TEST_DATABASE_URL): Pool {

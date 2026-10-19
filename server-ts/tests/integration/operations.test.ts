@@ -89,8 +89,8 @@ describe('assign a job to a technician', () => {
   describe('when another technician shares the first name', () => {
     async function addRahulIyer(): Promise<void> {
       await harness().pool.query(
-        `INSERT INTO resources (workspace_id, id, type, name, aliases, attributes)
-         VALUES ($1, 'tech_rahul_iyer', 'technician', 'Rahul Iyer', '{}', '{"active": true}')`,
+        `INSERT INTO resources (workspace_id, id, type, name, aliases, attributes, collection_key)
+         VALUES ($1, 'tech_rahul_iyer', 'technician', 'Rahul Iyer', '{}', '{"active": true}', 'technicians')`,
         [REPAIR_ID],
       );
     }

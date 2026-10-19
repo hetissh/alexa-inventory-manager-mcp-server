@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { normalizeStatus, statusLabel } from '../status.js';
+import { allowedStatuses, normalizeStatus, statusLabel } from '../status.js';
 import { defineOperation } from './types.js';
 
 const argsSchema = z.object({
@@ -9,19 +9,19 @@ const argsSchema = z.object({
     .trim()
     .min(1)
     .max(40)
-    .describe('The new status, as the user said it, for example "maintenance" or "sold out".'),
+    .describe('The new status, as the user said it, for example "maintenance", "sold out" or "reserved".'),
 });
 
-/** SET_STATUS: change the status of a piece of equipment or a menu item. Always needs confirmation. */
+/** SET_STATUS: change the status of a piece of equipment, a menu item or a dining table. Always needs confirmation. */
 export const setStatus = defineOperation({
   name: 'SET_STATUS',
-  targetTypes: ['equipment', 'menu_item'],
+  targetTypes: ['equipment', 'menu_item', 'dining_table'],
   argsSchema,
   plan({ status }, resource, { settings }) {
-    if (resource.type !== 'equipment' && resource.type !== 'menu_item') {
+    if (resource.type !== 'equipment' && resource.type !== 'menu_item' && resource.type !== 'dining_table') {
       return { kind: 'rejected', code: 'INVALID_TARGET', message: `${resource.name} does not have a status.` };
     }
-    const allowed = resource.type === 'equipment' ? settings.equipmentStatuses : settings.menuItemStatuses;
+    const allowed = allowedStatuses(resource.type, settings);
     const next = normalizeStatus(status, allowed, settings);
     if (next === undefined) {
       return {
